@@ -28,8 +28,9 @@
 
 /* *************** Define ****************** */
   #define MAX_SUPPORT_CANDEV             (3)
-
-
+  #define CAN1_INDEX                     (0)
+  #define CAN2_INDEX                     (1)
+  #define CAN3_INDEX                     (2)
 
 /* ***************************************** */
 
@@ -58,8 +59,8 @@ typedef enum
 
 typedef enum
 {
-  Cus_CAN_MODE_IDMASK,
-  Cus_CAN_MODE_IDLIST
+  Cus_CAN_FILTERMODE_IDMASK,
+  Cus_CAN_FILTERMODE_IDLIST
 
 } Cus_CANFilter_Mode_t;
 
@@ -70,6 +71,22 @@ typedef enum
   Cus_CAN_SCALE_32BIT
 
 } Cus_CANFilter_Scale_t;
+
+
+typedef enum
+{
+  Cus_CAN_FIFOASSIGNMENT_FIFO0,
+  Cus_CAN_FIFOASSIGNMENT_FIFO1
+
+} Cus_CANFIFOASS_t;
+
+
+typedef enum
+{
+  Cus_CAN_Enable,
+  Cus_CAN_Disable
+
+} Cus_CAN_Enb_t;
 
 
 typedef enum 
@@ -118,17 +135,27 @@ struct CANFilterConfig_t
 {
   Cus_CANFilter_Mode_t Mode;
   Cus_CANFilter_Scale_t Scale;
-  uint8_t FIFOAssignment;
+  Cus_CANFIFOASS_t FIFOAssignment;
   uint8_t FilterBank;
   uint32_t  IdHigh;              
   uint32_t  IdLow;               
   uint32_t  MaskIdHigh;          
   uint32_t  MaskIdLow;       
-  FunctionalState is_Activation;
+  Cus_CAN_Enb_t is_Activation;
   bool is_DynamicAlloc;
 
-  HAL_StatusTypeDef (*Cus_CAN_FilterInit)( const CANFilterConfig_t *pFilterConf );
+  HAL_StatusTypeDef (*Cus_CAN_FilterInit)( const CANFilterConfig_t *pFilterConf, CAN_TypeDef *instance );
   void (*Self_Release)( CANFilterConfig_t **pConf );
+};
+
+
+typedef struct Cus_CAN_Device Cus_CAN_Device_t;
+struct Cus_CAN_Device
+{
+  CAN_TypeDef *Instance;
+  CAN_HandleTypeDef *canHandle;
+  HAL_StatusTypeDef (*Send)(Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf);
+
 };
 
 /* ******************************************* */
@@ -139,6 +166,19 @@ struct CANFilterConfig_t
 uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
 uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
+const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+
+
+/* ----------------------------------------------------------------- */
+
+
+/* ----------------------------------------------------------------- */
+__weak void Cus_FilterConfigFailed_Hook( CAN_HandleTypeDef *hcan, const CANFilterConfig_t *pFilterConf, HAL_StatusTypeDef hal_status );
+__weak void Cus_CANInitFailed_Hook( CAN_HandleTypeDef *hcan, const CANInitConfig_t *pInitConf, HAL_StatusTypeDef hal_status );
+__weak void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef hal_status );
+__weak void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status );
+
 
 
 /* ----------------------------------------------------------------- */

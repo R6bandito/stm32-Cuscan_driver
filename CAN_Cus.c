@@ -2,17 +2,22 @@
 
 
 /* ------------------------ g_Ver & Static Ver -------------------------------- */
-CAN_HandleTypeDef canHandle[MAX_SUPPORT_CANDEV];
-
+static CAN_HandleTypeDef canHandle[MAX_SUPPORT_CANDEV] = { 0 };
+static Cus_CAN_Device_t *CanDevice[MAX_SUPPORT_CANDEV];
 /* ---------------------------------------------------------------------------- */
 
 
 /* ----------------------------------------------------------------- */
 uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
 uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
+HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
+const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+
+static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
 static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t * pConf_Structure );
-static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Structure );
+static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t *pInit );
+static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Structure, CAN_TypeDef *instance );
 static void __release( CANInitConfig_t **pConf );
 static void __release_filter( CANFilterConfig_t **pFilter );
 static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, uint32_t *prescaler, uint32_t *pbs1, uint32_t *pbs2);
@@ -43,6 +48,7 @@ uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig )
 {
   if ( !pOutConfig )  return 0xFF;
 
+  /* 注意: 传入的 pOutConfig 参数必须是对应调用层的全局变量.若为局部变量，则会丢失通过动态分配的内存从而造成内存泄漏！ */
   CANFilterConfig_t *pReturn = (CANFilterConfig_t *)malloc(sizeof(CANFilterConfig_t));
   if ( pReturn == NULL )  return 0xFF;
   *pOutConfig = pReturn;
@@ -53,6 +59,57 @@ uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig )
   (*pOutConfig)->is_DynamicAlloc = true;
   return 0;
 }
+
+
+
+
+/* -------------------------------------- CAN_TCB Relevant ----------------------------------------------------- */
+static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t *pInit )
+{
+//  if ( !pDevice || !(*pDevice) )    return 0xFF;
+  if ( !pInit )   return 0xFF;
+
+  Cus_CAN_Device_t *pTCB = (Cus_CAN_Device_t *)malloc(sizeof(Cus_CAN_Device_t));
+  if ( pTCB == NULL )   return 0xFF;
+  *pDevice = pTCB;
+
+  memset(*pDevice, 0, sizeof(Cus_CAN_Device_t));
+  (*pDevice)->Instance = pInit->Instance;
+  (*pDevice)->canHandle = Cus_CAN_getHandle(pInit->Instance);
+  (*pDevice)->Send = Cus_CAN_Send;
+
+  // 控制TCB不允许人为清理. 不注册清理函数.
+  return 0;
+}
+
+static void __canTCB_release( Cus_CAN_Device_t ** pDevice )
+{
+  if ( !pDevice || !(*pDevice) )   return;
+  free(*pDevice);
+  *pDevice = NULL;
+}
+
+
+const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance )
+{
+  if ( !instance )  return NULL;
+
+  int idx = -1;
+  if ( instance == CAN1 )  idx = CAN1_INDEX;
+  #if defined(CAN2)
+    if ( instance == CAN2 ) idx = CAN2_INDEX;
+  #endif // CAN2
+  #if defined(CAN3)
+    if ( instance == CAN3 ) idx = CAN3_INDEX;
+  #endif // CAN3
+
+  if ( idx < 0 || idx > MAX_SUPPORT_CANDEV )  return NULL;
+
+  return (const Cus_CAN_Device_t *)CanDevice[idx];
+}
+/* --------------------------------------------------------------------------------------------------- */
+
+
 
 
 static void __release( CANInitConfig_t **pConf )
@@ -71,7 +128,6 @@ static void __release_filter( CANFilterConfig_t **pFilter )
   free(*pFilter);
   *pFilter = NULL;
 }
-
 
 
 static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, uint32_t *prescaler, uint32_t *pbs1, uint32_t *pbs2)
@@ -108,7 +164,7 @@ static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, 
     if ( tq_num < min_tq || tq_num > max_tq )  continue;  // 确保一个位中的tq数符合CAN规范(8~25).
 
     /* 尝试分配 BS1 和 BS2，使采样点约 75% */
-    uint32_t bs1 = tq_num * ( 3 / 4 );
+    uint32_t bs1 = ( tq_num *  3 ) / 4 ;
     uint32_t bs2 = tq_num - bs1 - 1;                  // Ps: PTS传播段已被硬件整合进 PBS1 段中.
     if ( bs1 < 1 || bs1 > 16 )   continue;
     if ( bs2 < 1 || bs2 > 8 )   continue;
@@ -179,29 +235,34 @@ static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t * pConf_Structure )
   CAN_HandleTypeDef *hcan;
   if ( pConf_Structure->Instance == CAN1 )
   {
-    hcan = &canHandle[0];
+    hcan = &canHandle[CAN1_INDEX];
   }
   
   #if defined(CAN2)
     if ( pConf_Structure->Instance == CAN2 )
     {
-      hcan = &canHandle[1];
+      hcan = &canHandle[CAN2_INDEX];
     }
   #endif // CAN2
 
   #if defined(CAN3)
     if ( pConf_Structure->Instance == CAN3 )
     {
-      hcan = &canHandle[2];
+      hcan = &canHandle[CAN3_INDEX];
     }
   #endif // CAN3
 
   hcan->Instance = pConf_Structure->Instance;
   uint32_t prescaler, pbs1, pbs2;
-  if ( CAN_GetTimingFromBaudrate(pConf_Structure->baudrate, &prescaler, &pbs1, &pbs2) != HAL_OK )
-  {
-    return HAL_ERROR;
-  }
+  // if ( CAN_GetTimingFromBaudrate(pConf_Structure->baudrate, &prescaler, &pbs1, &pbs2) != HAL_OK )
+  // {
+  //   return HAL_ERROR;
+  // }
+/* 临时调试使用 */
+  prescaler = 3;
+  pbs1 = CAN_BS1_13TQ;
+  pbs2 = CAN_BS2_4TQ;
+/* 临时调试使用 */
 
   uint32_t SyncJumpWidth = 0;
   switch ( pConf_Structure->SJW )
@@ -237,7 +298,30 @@ static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t * pConf_Structure )
   hcan->Init.SyncJumpWidth = SyncJumpWidth;
   hcan->Init.Mode = can_Mode;
 
-  if ( HAL_CAN_Init(hcan) != HAL_OK )    return HAL_ERROR;
+  HAL_StatusTypeDef hReturn = HAL_CAN_Init(hcan);
+  if ( hReturn != HAL_OK )
+  {
+    Cus_CANInitFailed_Hook(hcan, (const CANInitConfig_t *)pConf_Structure, hReturn);
+
+    return HAL_ERROR;
+  }    
+
+  if ( pConf_Structure->Instance == CAN1 ) 
+  {
+    if ( createCANTCB( &CanDevice[CAN1_INDEX], pConf_Structure ) != 0 )    return HAL_ERROR;
+  }
+  #if defined(CAN2)
+    if ( pConf_Structure->Instance == CAN2 )
+    {
+      if ( createCANTCB( &CanDevice[CAN2_INDEX], pConf_Structure ) != 0 )    return HAL_ERROR;
+    }
+  #endif // CAN2
+  #if defined(CAN3)
+    if ( pConf_Structure->Instance == CAN3 )
+    {
+      if ( createCANTCB( &CanDevice[CAN3_INDEX], pConf_Structure ) != 0 )    return HAL_ERROR;
+    }
+  #endif // CAN3
 
   return HAL_OK; 
 }
@@ -259,3 +343,171 @@ CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance )
 
   return NULL;
 }
+
+
+
+static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Structure, CAN_TypeDef *instance )
+{
+  if ( !pConf_Structure || !instance )   return HAL_ERROR;
+
+  CAN_FilterTypeDef temp_filter = { 0 };
+  CAN_HandleTypeDef *hcan;
+  hcan = Cus_CAN_getHandle(instance);
+
+  uint32_t filterMode = 0;
+  switch(pConf_Structure->Mode)
+  {
+    case Cus_CAN_FILTERMODE_IDMASK: filterMode = CAN_FILTERMODE_IDMASK; break;
+    case Cus_CAN_FILTERMODE_IDLIST: filterMode = CAN_FILTERMODE_IDLIST; break;
+    default: filterMode = CAN_FILTERMODE_IDLIST;
+  }
+
+  uint32_t fifo_assignment = 0;
+  switch (pConf_Structure->FIFOAssignment)
+  {
+    case Cus_CAN_FIFOASSIGNMENT_FIFO0:  fifo_assignment = CAN_FILTER_FIFO0; break;
+    case Cus_CAN_FIFOASSIGNMENT_FIFO1:  fifo_assignment = CAN_FILTER_FIFO1; break;
+    default: fifo_assignment = CAN_FILTER_FIFO0; 
+  }
+
+  uint32_t filter_scale = 0;
+  switch (pConf_Structure->Scale)
+  {
+    case Cus_CAN_SCALE_16BIT: filter_scale = CAN_FILTERSCALE_16BIT; break;
+    case Cus_CAN_SCALE_32BIT: filter_scale = CAN_FILTERSCALE_32BIT; break;
+    default:  filter_scale = CAN_FILTERSCALE_16BIT;
+  }
+
+  uint32_t filter_activation = 0;
+  switch (pConf_Structure->is_Activation)
+  {
+    case Cus_CAN_Enable: filter_activation = CAN_FILTER_ENABLE; break;
+    case Cus_CAN_Disable: filter_activation = CAN_FILTER_DISABLE; break;
+    default:  filter_scale = CAN_FILTERSCALE_16BIT;
+  }  
+
+  temp_filter.FilterFIFOAssignment = fifo_assignment;
+  temp_filter.FilterMode = filterMode;
+  temp_filter.FilterBank = pConf_Structure->FilterBank;
+  temp_filter.FilterScale = filter_scale;
+
+  /* 滤波器ID配置部分将 直接使用由用户填充好的 ID 和掩码 */
+  /* 所以调用该方法时, 请确保上层已经正确填充 Id */
+  temp_filter.FilterIdHigh = pConf_Structure->IdHigh;
+  temp_filter.FilterIdLow = pConf_Structure->IdLow;
+  temp_filter.FilterMaskIdHigh = pConf_Structure->MaskIdHigh;
+  temp_filter.FilterMaskIdLow = pConf_Structure->MaskIdLow;
+
+  temp_filter.FilterActivation = filter_activation;
+
+  HAL_StatusTypeDef hReturn = HAL_CAN_ConfigFilter(hcan, (const CAN_FilterTypeDef *)&temp_filter);
+  if ( hReturn != HAL_OK )
+  {
+    Cus_FilterConfigFailed_Hook( hcan, (const CANFilterConfig_t *)pConf_Structure, hReturn );
+
+    return HAL_ERROR;
+  }
+
+  return HAL_OK; 
+}
+
+
+HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance )
+{
+  if ( !instance )  return HAL_ERROR;
+
+  CAN_HandleTypeDef *pcan = Cus_CAN_getHandle(instance);
+  if ( pcan == NULL )   return HAL_ERROR;
+
+  HAL_StatusTypeDef hReturn = HAL_CAN_Start( pcan );
+  if ( hReturn != HAL_OK )
+  { 
+    Cus_CANStartFailed_Hook(pcan, hReturn);
+
+    return HAL_ERROR;
+  }
+
+  return HAL_OK;
+}
+
+
+
+HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf )
+{
+  if ( !pDev || !Send_Buf || !pDev->canHandle || !pDev->Instance )    return HAL_ERROR;
+
+  if ( Txheader.DLC > 8 )   Txheader.DLC = 8;       // 长度限制为8.
+
+  uint32_t TxMailBox;
+  HAL_StatusTypeDef hReturn = HAL_CAN_AddTxMessage(pDev->canHandle, &Txheader, Send_Buf, &TxMailBox);
+  if ( hReturn != HAL_OK )
+  {
+    Cus_CANSendFailed_Hook(pDev, hReturn);
+
+    return HAL_ERROR;
+  }
+
+  uint32_t start_tick = HAL_GetTick();  
+  uint32_t txok_mask;
+
+  switch (TxMailBox)
+  {
+    case 1: txok_mask = CAN_TSR_TXOK0; break;
+    case 2: txok_mask = CAN_TSR_TXOK1; break;
+    case 4: txok_mask = CAN_TSR_TXOK2; break;
+    default: return HAL_ERROR;
+  }
+
+  while( (pDev->canHandle->Instance->TSR & txok_mask) == 0 )
+  {
+    if ( (HAL_GetTick() - start_tick) >= 100 )   // 100ms 超时.
+    {
+      printf("TX timeout, TSR=0x%08lX\n", pDev->Instance->TSR);
+      return HAL_TIMEOUT;
+    }
+  }
+
+  return HAL_OK;
+}
+
+
+
+
+
+
+/*
+  Default Fault Hook Defines.
+  错误处理相关Hook函数默认定义.
+*/
+/* ------------------------------------------------------------------------- */
+__weak void Cus_FilterConfigFailed_Hook( CAN_HandleTypeDef *hcan, const CANFilterConfig_t *pFilterConf, HAL_StatusTypeDef hal_status )
+{
+  UNUSED(hcan);
+  UNUSED(pFilterConf);
+  UNUSED(hal_status);
+}
+
+
+__weak void Cus_CANInitFailed_Hook( CAN_HandleTypeDef *hcan, const CANInitConfig_t *pInitConf, HAL_StatusTypeDef hal_status )
+{
+  UNUSED(hcan);
+  UNUSED(pInitConf);
+  UNUSED(hal_status);
+}
+
+
+__weak void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef hal_status )
+{
+  UNUSED(hcan);
+  UNUSED(hal_status);
+}
+
+
+__weak void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status )
+{
+  UNUSED(pDev);
+  UNUSED(hal_status);
+}
+
+
+/* ------------------------------------------------------------------------- */
