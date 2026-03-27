@@ -32,6 +32,16 @@
   #define CAN2_INDEX                     (1)
   #define CAN3_INDEX                     (2)
 
+  #define CAN_FILTER_RTR_NONE            (0)
+  #define CAN_FILTER_RTR_ID1             (1UL << 0)
+  #define CAN_FILTER_RTR_ID2             (1UL << 1)
+  #define CAN_FILTER_RTR_ID3             (1UL << 2)
+  #define CAN_FILTER_RTR_ID4             (1UL << 3)
+  #define CAN_FILTER_RTR_ALL             (CAN_FILTER_RTR_ID1 | CAN_FILTER_RTR_ID2 | CAN_FILTER_RTR_ID3 | CAN_FILTER_RTR_ID4)
+
+  #define CAN_FILTER_MASK_DATA           (0xAA)
+  #define CAN_FILTER_MASK_REMOTE         (0xBB)
+
 /* ***************************************** */
 
 
@@ -83,10 +93,10 @@ typedef enum
 
 typedef enum
 {
-  Cus_CAN_Enable,
-  Cus_CAN_Disable
+  Cus_FILTER_Enable,
+  Cus_FILTER_Disable
 
-} Cus_CAN_Enb_t;
+} Cus_CAN_FilterEnb_t;
 
 
 typedef enum 
@@ -141,7 +151,7 @@ struct CANFilterConfig_t
   uint32_t  IdLow;               
   uint32_t  MaskIdHigh;          
   uint32_t  MaskIdLow;       
-  Cus_CAN_Enb_t is_Activation;
+  Cus_CAN_FilterEnb_t is_Activation;
   bool is_DynamicAlloc;
 
   HAL_StatusTypeDef (*Cus_CAN_FilterInit)( const CANFilterConfig_t *pFilterConf, CAN_TypeDef *instance );
@@ -154,9 +164,22 @@ struct Cus_CAN_Device
 {
   CAN_TypeDef *Instance;
   CAN_HandleTypeDef *canHandle;
-  HAL_StatusTypeDef (*Send)(Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf);
+  HAL_StatusTypeDef (*Send)( const Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
+  HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t RxFifoIndex );
 
 };
+
+
+typedef struct 
+{
+  uint32_t prescaler;
+  uint32_t bs1;
+  uint32_t bs2;
+  float real_baudrate;
+  uint32_t can_clock;
+
+} Cus_CAN_RateInfo_t;
+
 
 /* ******************************************* */
 
@@ -166,8 +189,15 @@ struct Cus_CAN_Device
 uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
 uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
+HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+
+
+void Cus_CAN_Filter_SetStdList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
+void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 );
+void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint32_t id1, uint32_t id2 );
+void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id1_mask );
 
 
 /* ----------------------------------------------------------------- */
@@ -180,6 +210,39 @@ __weak void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef 
 __weak void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status );
 
 
+
+/**
+ * @brief 快速配置 CAN 外设（仅初始化，不含过滤器及启动）
+ * @param instance CAN 外设实例（CAN1/CAN2/CAN3）
+ * @param pGpio    GPIO 配置结构体指针，包含端口、RX/TX 引脚及 Alternate（F4 系列）
+ * @return HAL_OK 成功，否则错误码
+ * @note 默认参数：500kbps，普通模式，自动重传，FIFO 不锁定，按 ID 优先级发送。
+ *       初始化完成后不会自动启动 CAN，需用户自行调用 Cus_CAN_Start()。
+ *       若需接收数据，还需配置过滤器（可调用 Cus_Filter_QuickConfig）。
+ */
+__weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio );
+
+
+/**
+ * @brief 快速配置全通过滤器（接收所有帧）
+ * @param instance CAN 外设实例
+ * @return HAL_OK 成功，否则错误码
+ * @note 配置为 32 位掩码模式，ID 及掩码全 0，关联 FIFO0，滤波器组 0，并启用。
+ *       此函数需在 CAN 初始化后调用，过滤器生效前无需启动 CAN。通常用于快速设置
+ *       测试环境。
+ */
+__weak HAL_StatusTypeDef Cus_Filter_QuickConfig( CAN_TypeDef *instance );
+
+
+/**
+ * @brief 一键完整配置（默认初始化 + 全通过滤器 + 启动 CAN）
+ * @param instance CAN 外设实例
+ * @param pGpio    GPIO 配置结构体指针
+ * @return HAL_OK 成功，否则错误码
+ * @note 依次调用 Cus_CAN_QuickConfig、Cus_Filter_QuickConfig 和 Cus_CAN_Start。
+ *       适用于最简测试场景，用户无需额外操作即可开始收发。
+ */
+__weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio );
 
 /* ----------------------------------------------------------------- */
 

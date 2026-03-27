@@ -12,16 +12,24 @@ uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
 uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
+HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 
+
+void Cus_CAN_Filter_SetStdList32(  CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
+void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 );
+void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint32_t id1, uint32_t id2 );
+void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id1_mask );
+
+
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
-static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t * pConf_Structure );
-static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t *pInit );
-static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Structure, CAN_TypeDef *instance );
+static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t RxFifoIndex );
+static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t *pConf_Structure );
+static uint8_t createCANTCB( Cus_CAN_Device_t **pDevice, const CANInitConfig_t *pInit );
+static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t *pConf_Structure, CAN_TypeDef *instance );
 static void __release( CANInitConfig_t **pConf );
 static void __release_filter( CANFilterConfig_t **pFilter );
 static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, uint32_t *prescaler, uint32_t *pbs1, uint32_t *pbs2);
-
 /* ----------------------------------------------------------------- */
 
 
@@ -77,6 +85,7 @@ static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t 
   (*pDevice)->Instance = pInit->Instance;
   (*pDevice)->canHandle = Cus_CAN_getHandle(pInit->Instance);
   (*pDevice)->Send = Cus_CAN_Send;
+  (*pDevice)->Receive = Cus_CAN_Recv;
 
   // 控制TCB不允许人为清理. 不注册清理函数.
   return 0;
@@ -134,12 +143,7 @@ static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, 
 {
   if ( !prescaler || !pbs1 || !pbs2 )   return HAL_ERROR;
 
-  #warning "Please make sure that your CAN_Controler is belonged to APB1 BUS. If not you should Switch the Defines button and that will switch to APB3"
-  #if 1
-    uint32_t pclk_clock = HAL_RCC_GetPCLK1Freq();
-  #else 
-    uint32_t pclk_clock = HAL_RCC_GetPCLK3Freq();
-  #endif 
+  uint32_t pclk_clock = HAL_RCC_GetPCLK1Freq();
 
   uint32_t baudrate;
   switch(Baudrate)
@@ -254,15 +258,14 @@ static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t * pConf_Structure )
 
   hcan->Instance = pConf_Structure->Instance;
   uint32_t prescaler, pbs1, pbs2;
-  // if ( CAN_GetTimingFromBaudrate(pConf_Structure->baudrate, &prescaler, &pbs1, &pbs2) != HAL_OK )
-  // {
-  //   return HAL_ERROR;
-  // }
-/* 临时调试使用 */
-  prescaler = 3;
-  pbs1 = CAN_BS1_13TQ;
-  pbs2 = CAN_BS2_4TQ;
-/* 临时调试使用 */
+  if ( CAN_GetTimingFromBaudrate(pConf_Structure->baudrate, &prescaler, &pbs1, &pbs2) != HAL_OK )
+  {
+    return HAL_ERROR;
+  }
+
+  prescaler = prescaler;
+  pbs1 = ((pbs1 - 1) << 16);
+  pbs2 = ((pbs2 - 1) << 20);
 
   uint32_t SyncJumpWidth = 0;
   switch ( pConf_Structure->SJW )
@@ -328,6 +331,8 @@ static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t * pConf_Structure )
 
 
 
+
+/* -------------------------------------- CAN_get API Relevant ----------------------------------------------------- */
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance )
 {
   if ( !instance )   return NULL;
@@ -343,6 +348,42 @@ CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance )
 
   return NULL;
 }
+
+
+HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo )
+{
+  if ( !instance || !pOutInfo )   return HAL_ERROR;
+
+  CAN_HandleTypeDef *hcan = Cus_CAN_getHandle(instance);
+  if ( hcan == NULL )   return HAL_ERROR;
+
+  uint32_t BTR_cpy = (uint32_t)hcan->Instance->BTR;
+  uint32_t pres = ( BTR_cpy & 0x3FF ) + 1;
+
+  uint32_t temp_bs1 = (( BTR_cpy >> 16 ) & 0xF) + 1;
+  uint32_t temp_bs2 = (( BTR_cpy >> 20 ) & 0x7) + 1;
+  // 有效性检查（根据 STM32 参考手册）
+  if (pres < 1 || pres > 1024 ||
+    temp_bs1 < 1 || temp_bs1 > 16 ||
+    temp_bs2 < 1 || temp_bs2 > 8) 
+  {
+    return HAL_ERROR;
+  }
+
+  pOutInfo->prescaler = pres;
+  pOutInfo->bs1 = temp_bs1;
+  pOutInfo->bs2 = temp_bs2;
+
+  pOutInfo->can_clock = HAL_RCC_GetPCLK1Freq();
+
+  float tq = (float)pOutInfo->prescaler / (float)pOutInfo->can_clock;
+  float bit_time = (float)(1 + pOutInfo->bs1 + pOutInfo->bs2) * tq;
+  pOutInfo->real_baudrate = 1.0f / bit_time;
+
+  return HAL_OK;
+}
+/* -------------------------------------- CAN_get API Relevant ----------------------------------------------------- */
+
 
 
 
@@ -381,8 +422,8 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
   uint32_t filter_activation = 0;
   switch (pConf_Structure->is_Activation)
   {
-    case Cus_CAN_Enable: filter_activation = CAN_FILTER_ENABLE; break;
-    case Cus_CAN_Disable: filter_activation = CAN_FILTER_DISABLE; break;
+    case Cus_FILTER_Enable: filter_activation = CAN_FILTER_ENABLE; break;
+    case Cus_FILTER_Disable: filter_activation = CAN_FILTER_DISABLE; break;
     default:  filter_scale = CAN_FILTERSCALE_16BIT;
   }  
 
@@ -432,7 +473,8 @@ HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance )
 
 
 
-HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf )
+/* ------------------------------------------------------------------------- */
+static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf )
 {
   if ( !pDev || !Send_Buf || !pDev->canHandle || !pDev->Instance )    return HAL_ERROR;
 
@@ -442,8 +484,6 @@ HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txhe
   HAL_StatusTypeDef hReturn = HAL_CAN_AddTxMessage(pDev->canHandle, &Txheader, Send_Buf, &TxMailBox);
   if ( hReturn != HAL_OK )
   {
-    Cus_CANSendFailed_Hook(pDev, hReturn);
-
     return HAL_ERROR;
   }
 
@@ -458,11 +498,13 @@ HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txhe
     default: return HAL_ERROR;
   }
 
+  // 等待发送完成标志位置起.
   while( (pDev->canHandle->Instance->TSR & txok_mask) == 0 )
   {
     if ( (HAL_GetTick() - start_tick) >= 100 )   // 100ms 超时.
     {
-      printf("TX timeout, TSR=0x%08lX\n", pDev->Instance->TSR);
+			Cus_CANSendFailed_Hook(pDev, hReturn);
+
       return HAL_TIMEOUT;
     }
   }
@@ -471,7 +513,132 @@ HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txhe
 }
 
 
+static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t RxFifoIndex )
+{
+  if ( !pDev || !pHeader || !Recv_Buf )   return HAL_ERROR;
 
+  if ( RxFifoIndex == 0 )
+  {
+    return HAL_CAN_GetRxMessage(pDev->canHandle, CAN_RX_FIFO0, pHeader, Recv_Buf);
+  }
+  else if ( RxFifoIndex == 1 )
+  {
+    return HAL_CAN_GetRxMessage(pDev->canHandle, CAN_RX_FIFO1, pHeader, Recv_Buf);
+  }
+  else return HAL_ERROR;
+}
+
+/* ------------------------------------------------------------------------- */
+
+
+
+
+void Cus_CAN_Filter_SetStdList32(  CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 )
+{
+  if ( id1 > 0x7FF || id2 > 0x7FF || !pFilter )  return;
+
+  uint32_t ide_bit = 0;
+
+  uint8_t RTR_bit_1 = (Filter_RTR & 0x01UL);
+  RTR_bit_1 = (RTR_bit_1 >> 0) & 0x01UL;
+  uint32_t id1_regVal = ((uint32_t)id1 << 21) | (RTR_bit_1 << 1) | (ide_bit << 2);
+
+  uint8_t RTR_bit_2 = (Filter_RTR & (0x01UL << 1));
+  RTR_bit_2 = (RTR_bit_2 >> 1) & 0x01UL;
+  uint32_t id2_regVal = ((uint32_t)id2 << 21) | (RTR_bit_2 << 1) | (ide_bit << 2);
+
+  pFilter->IdHigh = (id1_regVal >> 16) & 0xFFFF;      // 高16位放在IDHigh.
+  pFilter->IdLow = id1_regVal & 0xFFFF;               // 低16位放在IDLow.
+  pFilter->MaskIdHigh = (id2_regVal >> 16) & 0xFFFF;
+  pFilter->MaskIdLow = id2_regVal & 0xFFFF;
+}
+
+
+void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 )
+{
+  if ( !pFilter || id1 > 0x7FF || id2 > 0x7FF || id3 > 0x7FF || id4 > 0x7FF )   return;
+
+  uint32_t ide_bit = 0;
+  uint8_t RTR_bit_1 = (Filter_RTR & 0x01UL);    // 取第一位.
+  RTR_bit_1 = RTR_bit_1 >> 0 & 0x01UL;
+  uint32_t id1_regVal = ((uint32_t)id1 << 5 ) | (RTR_bit_1 << 4) | (ide_bit << 3);
+
+  uint8_t RTR_bit_2 = (Filter_RTR & (0x01UL << 1)); 
+  RTR_bit_2 = RTR_bit_2 >> 1 & 0x01UL;
+  uint32_t id2_regVal = ((uint32_t)id2 << 5 ) | (RTR_bit_2 << 4) | (ide_bit << 3);
+
+  uint8_t RTR_bit_3 = (Filter_RTR & (0x01UL << 2));
+  RTR_bit_3 = RTR_bit_3 >> 2 & 0x01UL;
+  uint32_t id3_regVal = ((uint32_t)id3 << 5 ) | (RTR_bit_3 << 4) | (ide_bit << 3);
+
+  uint8_t RTR_bit_4 = (Filter_RTR & (0x01UL << 3));
+  RTR_bit_4 = RTR_bit_4 >> 3 & 0x01UL;
+  uint32_t id4_regVal = ((uint32_t)id4 << 5 ) | (RTR_bit_4 << 4) | (ide_bit << 3);
+
+  pFilter->IdHigh = id1_regVal;
+  pFilter->IdLow = id2_regVal;
+  pFilter->MaskIdHigh = id3_regVal;
+  pFilter->MaskIdLow = id4_regVal;
+}
+
+
+void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint32_t id1, uint32_t id2 )
+{
+  if ( !pFilter || id1 > 0x1FFFFFFF || id2 > 0x1FFFFFFF )  return;
+
+  uint32_t ide = 1;
+  uint8_t RTR_bit_1 = (Filter_RTR & 0x01UL);
+  RTR_bit_1 = (RTR_bit_1 >> 0) & 0x01UL;
+  uint32_t id1_regVal = (id1 << 3) | (RTR_bit_1 << 1) | (ide << 2);
+
+  uint8_t RTR_bit_2 = (Filter_RTR & (0x01UL << 1));
+  RTR_bit_2 = (RTR_bit_2 >> 1) & 0x01UL;
+  uint32_t id2_regVal = (id2 << 3) | (RTR_bit_2 << 1) | (ide << 2);
+
+  pFilter->IdHigh = (id1_regVal >> 16) & 0xFFFF;
+  pFilter->IdLow = (id1_regVal) & 0xFFFF;
+  pFilter->MaskIdHigh = (id2_regVal >> 16) & 0xFFFF;
+  pFilter->MaskIdLow = (id2_regVal) & 0xFFFF;
+}
+
+
+void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id1_mask )
+{
+  if ( !pFilter || id1 > 0x7FF || id1_mask > 0x7FF )  return;
+
+  uint32_t RTR_bit;
+  uint32_t RTR_Force_Match;
+  uint32_t ide_bit = 0;
+  if ( Filter_RTR == CAN_FILTER_MASK_DATA )   
+  {
+    RTR_Force_Match = 1;                  // 不匹配遥控帧. 强制RTR位为0,只匹配数据帧.
+    RTR_bit = 0;
+  }
+  else if ( Filter_RTR == CAN_FILTER_MASK_REMOTE )
+  {
+    RTR_Force_Match = 1;                    // 只匹配遥控帧. 强制RTR为1.
+    RTR_bit = 1;
+  }
+  else if ( Filter_RTR == (CAN_FILTER_MASK_REMOTE | CAN_FILTER_MASK_DATA) )
+  {
+    RTR_Force_Match = 0;                    // 遥控帧与数据帧均匹配.
+    RTR_bit = 0;
+  }
+  else 
+  {
+    // 无效模式，默认只收数据帧
+    RTR_Force_Match = 1;
+    RTR_bit = 0;
+  }
+
+  uint32_t id_regVal = ((uint32_t)id1 << 21) | (RTR_bit << 1) | (ide_bit << 2);
+  uint32_t mask_regVal = ((uint32_t)id1_mask << 21) | (RTR_Force_Match << 1) | (ide_bit << 2);
+
+  pFilter->IdHigh = (id_regVal >> 16) & 0xFFFF;
+  pFilter->IdLow = (id_regVal) & 0xFFFF;
+  pFilter->MaskIdHigh = (mask_regVal >> 16) & 0xFFFF;
+  pFilter->MaskIdLow = (mask_regVal) & 0xFFFF;
+}
 
 
 
@@ -507,6 +674,95 @@ __weak void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef ha
 {
   UNUSED(pDev);
   UNUSED(hal_status);
+}
+
+
+
+/**
+ * @brief 快速配置 CAN（默认普通模式，500kbps）
+ * @note 弱函数，用户可覆盖。可自定义快速启动配置。
+ */
+__attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio )
+{
+  if ( !instance || !g_gpio )   return HAL_ERROR;
+
+  CAN_HandleTypeDef *hcan = Cus_CAN_getHandle(instance);
+  CANInitConfig_t *pInit;
+  if ( Factory_CANInitConfig_t(&pInit) != 0 )   return HAL_ERROR;
+
+  pInit->baudrate = CAN_BAUDRATE_500K;
+  pInit->Instance = instance;
+  pInit->Mode = MODE_LOOPBACK;
+  pInit->is_AutoBusOff = false;
+  pInit->is_AutoRestransmission = true;
+  pInit->is_AutoWakeUP = false;
+  pInit->is_ReceiveFifoLocked = false;
+  pInit->is_TimeTriggeredMode = false;
+  pInit->is_TransmitFifoPriority = false;
+  pInit->SJW = Cus_CAN_SJW_1Tq;
+
+  memcpy(&pInit->CAN_gpio, g_gpio, sizeof(Cus_CAN_GPIO_t));
+
+  HAL_StatusTypeDef hReturn = pInit->Cus_CAN_Init((const CANInitConfig_t *)pInit);
+
+  pInit->Self_Release(&pInit);      // 释放配置结构体. 不再需要.
+
+  return hReturn;
+}
+
+
+
+/**
+ * @brief 快速配置 过滤器（默认全通 32位宽，接收所有帧）
+ * @note 弱函数，用户可覆盖。可自定义快速启动配置。
+ */
+__attribute__((used)) __weak HAL_StatusTypeDef Cus_Filter_QuickConfig( CAN_TypeDef *instance )
+{
+  if ( !instance )    return HAL_ERROR;
+
+  CAN_HandleTypeDef *hcan = Cus_CAN_getHandle(instance);
+  if ( hcan == NULL )   return HAL_ERROR;
+
+  CANFilterConfig_t *pFilter;
+  if ( Factory_CANFilterConfig_t(&pFilter) != 0 )   return HAL_ERROR;
+
+  pFilter->FIFOAssignment = Cus_CAN_FIFOASSIGNMENT_FIFO0;
+  pFilter->FilterBank = 0;
+  pFilter->IdHigh = 0x0;
+  pFilter->IdLow = 0x0;
+  pFilter->MaskIdHigh = 0x0;
+  pFilter->MaskIdLow = 0x0;
+  pFilter->Mode = Cus_CAN_FILTERMODE_IDMASK;
+  pFilter->Scale = Cus_CAN_SCALE_32BIT;
+  pFilter->is_Activation = Cus_FILTER_Enable;
+
+  HAL_StatusTypeDef hReturn = pFilter->Cus_CAN_FilterInit((const CANFilterConfig_t *)pFilter, instance);
+
+  pFilter->Self_Release(&pFilter);
+
+  return hReturn;
+}
+
+
+
+/**
+ * @brief 一键配置CAN启动
+ * @note 弱函数，用户可覆盖。可自定义快速启动配置。
+ */
+__attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio )
+{
+  if ( !instance || !g_gpio )   return HAL_ERROR;
+  
+  HAL_StatusTypeDef hReturn;
+  hReturn = Cus_CAN_QuickConfig(instance, g_gpio);
+  if ( hReturn != HAL_OK )  return HAL_ERROR;
+
+  hReturn = Cus_Filter_QuickConfig(instance);
+  if ( hReturn != HAL_OK )  return HAL_ERROR;
+
+  hReturn = Cus_CAN_Start(instance);
+
+  return hReturn;
 }
 
 
