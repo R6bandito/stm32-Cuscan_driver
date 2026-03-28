@@ -19,7 +19,9 @@ const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 void Cus_CAN_Filter_SetStdList32(  CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
 void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 );
 void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint32_t id1, uint32_t id2 );
-void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id1_mask );
+void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask );
+void Cus_CAN_Filter_SetExtMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint32_t id1, uint32_t id1_mask );
+void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask );
 
 
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
@@ -602,24 +604,25 @@ void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR
 }
 
 
-void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id1_mask )
+void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask )
 {
   if ( !pFilter || id1 > 0x7FF || id1_mask > 0x7FF )  return;
 
   uint32_t RTR_bit;
   uint32_t RTR_Force_Match;
   uint32_t ide_bit = 0;
-  if ( Filter_RTR == CAN_FILTER_MASK_DATA )   
+  uint32_t ide_bit_Force_Match = 1;
+  if ( Filter_MASK_RTR == CAN_FILTER_MASK_DATA )   
   {
     RTR_Force_Match = 1;                  // 不匹配遥控帧. 强制RTR位为0,只匹配数据帧.
     RTR_bit = 0;
   }
-  else if ( Filter_RTR == CAN_FILTER_MASK_REMOTE )
+  else if ( Filter_MASK_RTR == CAN_FILTER_MASK_REMOTE )
   {
     RTR_Force_Match = 1;                    // 只匹配遥控帧. 强制RTR为1.
     RTR_bit = 1;
   }
-  else if ( Filter_RTR == (CAN_FILTER_MASK_REMOTE | CAN_FILTER_MASK_DATA) )
+  else if ( Filter_MASK_RTR == (CAN_FILTER_MASK_REMOTE | CAN_FILTER_MASK_DATA) )
   {
     RTR_Force_Match = 0;                    // 遥控帧与数据帧均匹配.
     RTR_bit = 0;
@@ -632,12 +635,97 @@ void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR
   }
 
   uint32_t id_regVal = ((uint32_t)id1 << 21) | (RTR_bit << 1) | (ide_bit << 2);
-  uint32_t mask_regVal = ((uint32_t)id1_mask << 21) | (RTR_Force_Match << 1) | (ide_bit << 2);
+  uint32_t mask_regVal = ((uint32_t)id1_mask << 21) | (RTR_Force_Match << 1) | (ide_bit_Force_Match << 2);
 
   pFilter->IdHigh = (id_regVal >> 16) & 0xFFFF;
   pFilter->IdLow = (id_regVal) & 0xFFFF;
   pFilter->MaskIdHigh = (mask_regVal >> 16) & 0xFFFF;
   pFilter->MaskIdLow = (mask_regVal) & 0xFFFF;
+}
+
+
+void Cus_CAN_Filter_SetExtMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint32_t id1, uint32_t id1_mask )
+{
+  if ( !pFilter || id1 > 0x1FFFFFFF || id1_mask > 0x1FFFFFFF )   return;
+
+  uint32_t RTR_bit;
+  uint32_t RTR_Force_Match;
+  uint32_t ide_bit = 1;
+  uint32_t ide_bit_Force_Match = 1;
+
+  if ( Filter_MASK_RTR == CAN_FILTER_MASK_DATA )   
+  {
+    RTR_Force_Match = 1;                  // 不匹配遥控帧. 强制RTR位为0,只匹配数据帧.
+    RTR_bit = 0;
+  }
+  else if ( Filter_MASK_RTR == CAN_FILTER_MASK_REMOTE )
+  {
+    RTR_Force_Match = 1;                    // 只匹配遥控帧. 强制RTR为1.
+    RTR_bit = 1;
+  }
+  else if ( Filter_MASK_RTR == (CAN_FILTER_MASK_REMOTE | CAN_FILTER_MASK_DATA) )
+  {
+    RTR_Force_Match = 0;                    // 遥控帧与数据帧均匹配.
+    RTR_bit = 0;
+  }
+  else 
+  {
+    // 无效模式，默认只收数据帧
+    RTR_Force_Match = 1;
+    RTR_bit = 0;
+  }
+
+  uint32_t id1_regVal = (id1 << 3) | (RTR_bit << 1) | (ide_bit << 2);
+  uint32_t mask_regVal = (id1_mask << 3) | (RTR_Force_Match << 1) | (ide_bit_Force_Match << 2);
+
+  pFilter->IdHigh = (id1_regVal >> 16) & 0xFFFF;
+  pFilter->IdLow = (id1_regVal) & 0xFFFF;
+  pFilter->MaskIdHigh = (mask_regVal >> 16) & 0xFFFF;
+  pFilter->MaskIdLow = (mask_regVal) & 0xFFFF;
+}
+
+
+void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask )
+{
+  if ( !pFilter || id1 > 0x7FF || id1_mask > 0x7FF || id2 > 0x7FF || id2_mask > 0x7FF )   return;
+
+  uint32_t ide_bit = 0;
+  uint32_t ide_bit_Force_Match = 1;
+
+  uint32_t RTR_bit;
+  uint32_t RTR_Force_Match;
+  if ( Filter_MASK_RTR == CAN_FILTER_MASK_DATA )   
+  {
+    RTR_Force_Match = 1;                  // 不匹配遥控帧. 强制RTR位为0,只匹配数据帧.
+    RTR_bit = 0;
+  }
+  else if ( Filter_MASK_RTR == CAN_FILTER_MASK_REMOTE )
+  {
+    RTR_Force_Match = 1;                    // 只匹配遥控帧. 强制RTR为1.
+    RTR_bit = 1;
+  }
+  else if ( Filter_MASK_RTR == (CAN_FILTER_MASK_REMOTE | CAN_FILTER_MASK_DATA) )
+  {
+    RTR_Force_Match = 0;                    // 遥控帧与数据帧均匹配.
+    RTR_bit = 0;
+  }
+  else 
+  {
+    // 无效模式，默认只收数据帧
+    RTR_Force_Match = 1;
+    RTR_bit = 0;
+  }
+
+  uint32_t id1_regVal = ((uint32_t)id1 << 5) | (RTR_bit << 4) | (ide_bit << 3);
+  uint32_t id1_maskregVal = ((uint32_t)id1_mask << 5) | (RTR_Force_Match << 4) | (ide_bit_Force_Match << 3);
+
+  uint32_t id2_regVal = ((uint32_t)id2 << 5) | (RTR_bit << 4) | (ide_bit << 3);
+  uint32_t id2_maskregVal = ((uint32_t)id2_mask << 5) | (RTR_Force_Match << 4) | (ide_bit_Force_Match << 3);
+
+  pFilter->IdHigh = (id1_regVal);
+  pFilter->IdLow = (id2_regVal);
+  pFilter->MaskIdHigh = (id1_maskregVal);
+  pFilter->MaskIdLow = (id2_maskregVal);
 }
 
 
@@ -692,7 +780,7 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
 
   pInit->baudrate = CAN_BAUDRATE_500K;
   pInit->Instance = instance;
-  pInit->Mode = MODE_LOOPBACK;
+  pInit->Mode = MODE_NORMAL;
   pInit->is_AutoBusOff = false;
   pInit->is_AutoRestransmission = true;
   pInit->is_AutoWakeUP = false;

@@ -192,13 +192,96 @@ CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+/* ----------------------------------------------------------------- */
 
 
-void Cus_CAN_Filter_SetStdList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
-void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 );
-void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint32_t id1, uint32_t id2 );
-void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id1_mask );
+/* ----------------------------------------------------------------- */
+/** ************************************************************************************************************
+ * @brief   CAN 过滤器ID配置辅助函数库
+ * @details 一组用于配置 STM32 CAN 过滤器 ID 配置的便捷函数。
+ *          支持列表模式（ID 列表）和掩码模式（ID+掩码），覆盖标准帧（11 位 ID）和扩展帧（29 位 ID）。
+ *          所有函数仅填充 CANFilterConfig_t 结构体的 ID 和掩码字段.
+ *
+ * @note    使用前请确保已包含正确的 STM32 HAL 头文件（如 stm32f1xx_hal.h）。
+ * @note    Filter_MASK_RTR 参数使用以下宏组合：
+ *          - CAN_FILTER_MASK_DATA   : 只接收数据帧
+ *          - CAN_FILTER_MASK_REMOTE : 只接收远程帧
+ *          - 两者按位或 : 数据帧和远程帧都接收
+ * 
+ *          Filter_RTR 参数使用以下宏组合:
+ *          - CAN_FILTER_RTR_ID1     : 列表模式下.ID1接收远程帧.
+ *          - CAN_FILTER_RTR_ID2     : 列表模式下.ID2接收远程帧.
+ *          - CAN_FILTER_RTR_ID3     : 列表模式下.ID3接收远程帧.
+ *          - CAN_FILTER_RTR_ID4     : 列表模式下.ID4接收远程帧.
+ *          - CAN_FILTER_RTR_NONE    : 列表模式下. 所有ID均接收数据帧.
+ *          - CAN_FILTER_RTR_ALL     : 列表模式下. 所有ID均接收远程帧.
+ * ************************************************************************************************************
+ */
 
+  /**
+   * @brief   配置 32 位列表模式过滤器，接收两个标准 ID（11 位）。
+   * @param   pFilter      指向 CANFilterConfig_t 结构体的指针，用于接收配置值。
+   * @param   Filter_RTR   RTR 控制位掩码，低 2 位分别对应 id1 和 id2：
+   *                       - bit0: id1 的 RTR 控制（0=数据帧，1=远程帧）
+   *                       - bit1: id2 的 RTR 控制
+   *                       可使用 CAN_FILTER_RTR_ID1 / CAN_FILTER_RTR_ID2 进行组合。
+   * @param   id1          第一个标准 ID（0~0x7FF）。
+   * @param   id2          第二个标准 ID（0~0x7FF）。
+ */
+    void Cus_CAN_Filter_SetStdList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
+    
+  /**
+   * @brief   配置 16 位列表模式过滤器，接收四个标准 ID（11 位）。
+   * @param   pFilter      指向 CANFilterConfig_t 结构体的指针。
+   * @param   Filter_RTR   RTR 控制位掩码，低 4 位分别对应 id1~id4：
+   *                       - bit0: id1, bit1: id2, bit2: id3, bit3: id4
+   *                       每位 0=数据帧，1=远程帧。
+   * @param   id1,id2,id3,id4  四个标准 ID（各 0~0x7FF）。
+ */
+    void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 );
+
+  /**
+   * @brief   配置 32 位列表模式过滤器，接收两个扩展 ID（29 位）。
+   * @param   pFilter      指向 CANFilterConfig_t 结构体的指针。
+   * @param   Filter_RTR   RTR 控制位掩码，低 2 位分别对应 id1 和 id2（0=数据帧，1=远程帧）。
+   * @param   id1          第一个扩展 ID（0~0x1FFFFFFF）。
+   * @param   id2          第二个扩展 ID（0~0x1FFFFFFF）。
+   * @note    过滤器会自动强制匹配 IDE=1（扩展帧），无需额外配置。
+ */
+    void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint32_t id1, uint32_t id2 );
+
+  /**
+   * @brief   配置 32 位掩码模式过滤器，匹配一个标准 ID（11 位）。
+   * @param   pFilter         指向 CANFilterConfig_t 结构体的指针。
+   * @param   Filter_MASK_RTR RTR 匹配模式，可选值：
+   *                          - CAN_FILTER_MASK_DATA   : 只接收数据帧
+   *                          - CAN_FILTER_MASK_REMOTE : 只接收远程帧
+   *                          - 两者按位或 : 数据帧和远程帧都接收
+   * @param   id1             期望匹配的标准 ID（0~0x7FF）。
+   * @param   id1_mask        掩码，对应位为 1 表示必须匹配，为 0 表示忽略。
+ */
+    void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask );
+
+  /**
+   * @brief   配置 32 位掩码模式过滤器，匹配一个扩展 ID（29 位）。
+   * @param   pFilter         指向 CANFilterConfig_t 结构体的指针。
+   * @param   Filter_MASK_RTR RTR 匹配模式（同 SetStdMask32）。
+   * @param   id1             期望匹配的扩展 ID（0~0x1FFFFFFF）。
+   * @param   id1_mask        掩码，对应位为 1 表示必须匹配，为 0 表示忽略。
+   * @note    过滤器会自动强制匹配 IDE=1（扩展帧），无需额外配置。
+ */
+    void Cus_CAN_Filter_SetExtMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint32_t id1, uint32_t id1_mask );
+
+  /**
+   * @brief   配置 16 位掩码模式过滤器，匹配两个独立的标准 ID（11 位）。
+   * @param   pFilter         指向 CANFilterConfig_t 结构体的指针。
+   * @param   Filter_MASK_RTR RTR 匹配模式（同 SetStdMask32），**两个过滤器共用此设置,请注意**。
+   * @param   id1, id1_mask   第一个过滤器的 ID 和掩码。
+   * @param   id2, id2_mask   第二个过滤器的 ID 和掩码。
+   * @note    调用后需设置 FilterMode = Cus_CAN_MODE_IDMASK, FilterScale = Cus_CAN_SCALE_16BIT。
+   * @note    两个过滤器独立工作，可分别匹配不同 ID。
+ */
+    void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask );
 
 /* ----------------------------------------------------------------- */
 
