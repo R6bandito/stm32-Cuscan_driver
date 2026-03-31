@@ -4,7 +4,33 @@
 /* ------------------------ g_Ver & Static Ver -------------------------------- */
 static CAN_HandleTypeDef canHandle[MAX_SUPPORT_CANDEV] = { 0 };
 static Cus_CAN_Device_t *CanDevice[MAX_SUPPORT_CANDEV];
+
+#if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+  void *g_pBackUP_Array[MAX_FIFO_FULL_COUNT];
+#endif // USE_DEFAULT_RxFIFO_FULL_HOOK
+
+
+// Device结构 私有变量.用户不允许直接访问.
+typedef struct Cus_Private
+{
+  // 用户注册的缓冲区信息.
+  void *RxBuffer;
+  uint32_t buffer_Size; 
+
+  // 环形缓冲区管理变量（由驱动内部使用）.
+  volatile uint16_t head;
+  volatile uint16_t tail;
+  uint16_t max_msgNum;
+
+  Cus_CAN_RxMsg_t *pRing;        // 将 pBuffer 强制转换为 Cus_CAN_RxMsg_t* 后的指针
+
+} Cus_CAN_Priv_t;
 /* ---------------------------------------------------------------------------- */
+
+
+/* ------------------- Default Feature Declare --------------------- */
+
+/* ----------------------------------------------------------------- */
 
 
 /* ----------------------------------------------------------------- */
@@ -13,7 +39,8 @@ uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
-const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
 
 
 void Cus_CAN_Filter_SetStdList32(  CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
@@ -24,9 +51,13 @@ void Cus_CAN_Filter_SetExtMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MAS
 void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask );
 
 
+static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
-static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t RxFifoIndex );
+static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
+static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf );
+static HAL_StatusTypeDef Cus_CAN_EnbIT( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
 static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t *pConf_Structure );
+static bool CheckInterrupt( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
 static uint8_t createCANTCB( Cus_CAN_Device_t **pDevice, const CANInitConfig_t *pInit );
 static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t *pConf_Structure, CAN_TypeDef *instance );
 static void __release( CANInitConfig_t **pConf );
@@ -83,11 +114,32 @@ static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t 
   if ( pTCB == NULL )   return 0xFF;
   *pDevice = pTCB;
 
+  Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)malloc(sizeof(Cus_CAN_Priv_t));
+  if ( pPrivate == NULL )   return 0xFF;
+  
+  pPrivate->RxBuffer = NULL;
+  pPrivate->head = 0;
+  pPrivate->tail = 0;
+  pPrivate->max_msgNum = 0;
+  pPrivate->buffer_Size = 0;
+  pPrivate->pRing = NULL;
+
   memset(*pDevice, 0, sizeof(Cus_CAN_Device_t));
   (*pDevice)->Instance = pInit->Instance;
   (*pDevice)->canHandle = Cus_CAN_getHandle(pInit->Instance);
   (*pDevice)->Send = Cus_CAN_Send;
   (*pDevice)->Receive = Cus_CAN_Recv;
+  (*pDevice)->EnableInterrupt = Cus_CAN_EnbIT;
+  (*pDevice)->CheckInterrupt = CheckInterrupt;
+  (*pDevice)->registerRxBuffer = Cus_CAN_registerRXBuffer;
+  (*pDevice)->private = (void *)pPrivate;
+  (*pDevice)->Receive_IT = Cus_CAN_Recv_IT;
+
+  #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+    (*pDevice)->is_RingFIFO_Full = false;
+    (*pDevice)->RingFIFOFull_Count = 0;
+    (*pDevice)->pBackUPRecv_Buf = g_pBackUP_Array;
+  #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
   // 控制TCB不允许人为清理. 不注册清理函数.
   return 0;
@@ -101,7 +153,21 @@ static void __canTCB_release( Cus_CAN_Device_t ** pDevice )
 }
 
 
-const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance )
+/**
+ * @brief 获取指定 CAN 实例的设备控制块指针
+ * @param instance CAN 外设实例（CAN1/CAN2/CAN3）
+ * @return 指向 Cus_CAN_Device_t 结构体的指针，若实例无效或未初始化则返回 NULL
+ *
+ * @note 该函数返回的设备控制块包含发送、接收、中断使能等函数指针，
+ *       用户可通过该指针调用驱动提供的 API（如 dev->Send、dev->Receive_IT 等）。
+ *       驱动内部维护该结构体，用户可读取其中的成员（如 Instance、canHandle），
+ *       但不应随意修改，以免破坏驱动状态。
+ *       调用前请确保对应的 CAN 实例已通过 Cus_CAN_Init 或快速配置函数初始化。
+ *
+ * @warning 返回的指针仅当 CAN 已初始化且设备对象有效时才可安全使用。
+ *          设备对象在驱动生命周期内保持不变，用户无需释放。
+ */
+Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance )
 {
   if ( !instance )  return NULL;
 
@@ -116,7 +182,7 @@ const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance )
 
   if ( idx < 0 || idx > MAX_SUPPORT_CANDEV )  return NULL;
 
-  return (const Cus_CAN_Device_t *)CanDevice[idx];
+  return CanDevice[idx];
 }
 /* --------------------------------------------------------------------------------------------------- */
 
@@ -333,8 +399,86 @@ static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t * pConf_Structure )
 
 
 
+/**
+ * @brief 使能 CAN 控制器中断（同时自动配置 NVIC）
+ * @param pDev           指向 CAN 设备对象的指针
+ * @param interrupt_mask HAL 库定义的中断掩码，例如：
+ *                        - CAN_IT_RX_FIFO0_MSG_PENDING
+ *                        - CAN_IT_RX_FIFO1_MSG_PENDING
+ *                        - CAN_IT_TX_MAILBOX_EMPTY
+ *                        - CAN_IT_ERROR
+ *                        - 可按位或组合多个中断源
+ * @return HAL_OK 成功；HAL_ERROR 参数错误或 CAN 未启动；HAL_TIMEOUT 启动超时
+ *
+ * @note 该函数会检查 CAN 是否已启动（INAK 位），若未启动则自动调用 Cus_CAN_Start()。
+ *       使能中断后会自动调用 Cus_CAN_NVIC_Config() 配置 NVIC 优先级。
+ *       使用前请确保已调用 Cus_CAN_Start() 或驱动已初始化。
+ *       用户应使用此函数而非直接调用 HAL_CAN_ActivateNotification()，以保持 NVIC 同步。
+ *
+ * @warning 如果同时使能 FIFO0 和 FIFO1 的中断，必须确保在 Cus_CAN_NVIC_Config 中
+ *          为两者设置相同的优先级（默认均为 5），否则可能破坏环形缓冲区。
+ */
+static HAL_StatusTypeDef Cus_CAN_EnbIT( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask )
+{
+  if ( !pDev || !pDev->canHandle )    return HAL_ERROR;
+
+  uint8_t check_INAK = (uint8_t)((uint32_t)(pDev->Instance->MSR) & 0x01UL );
+  if ( check_INAK != 0x00 )     // 检查CAN是否已启动. 只有当CAN处于运行状态时才能Activate中断.
+  {
+    HAL_StatusTypeDef hReturn = Cus_CAN_Start(pDev->Instance);
+    if ( hReturn != HAL_OK )
+    {
+      Cus_CANStartFailed_Hook(pDev->canHandle, hReturn);
+
+      return HAL_TIMEOUT;
+    }
+  }
+  HAL_StatusTypeDef hReturn = HAL_CAN_ActivateNotification(pDev->canHandle, interrupt_mask);
+  if ( hReturn != HAL_OK )    return HAL_ERROR;
+
+  if ( !pDev->CheckInterrupt(pDev, interrupt_mask) )   return HAL_ERROR;                // 额外检查. 
+  Cus_CAN_NVIC_Config(pDev);                                                            // 更新NVIC配置.
+
+  return HAL_OK;
+}
+
+
+/**
+ * @brief 检查 CAN 控制器是否已使能指定的中断
+ * @param pDev           指向 CAN 设备对象的指针
+ * @param interrupt_mask HAL 库定义的中断掩码（同 Cus_CAN_EnbIT 的 mask 参数）
+ * @return true  指定的中断已使能（IER 寄存器中对应位为 1）
+ * @return false 指定的中断未使能或参数错误
+ *
+ * @note 该函数直接读取 CAN 控制器的 IER 寄存器，查询中断使能状态。
+ *       可用于判断是否已通过 Cus_CAN_EnbIT 开启了某个中断。
+ *       通常用于避免轮询模式与中断模式冲突（例如在 Cus_CAN_Recv 中检查中断是否已使能）。
+ *
+ * @warning 该函数不检查 NVIC 层中断是否开启，仅反映 CAN 控制器内部中断使能状态。
+ */
+static bool CheckInterrupt( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask )
+{
+  if ( !pDev || !pDev->canHandle )  return false;
+
+  uint32_t check_IT = ((pDev->Instance->IER) & interrupt_mask);
+  if ( check_IT == interrupt_mask )   return true;
+  else return false;
+}
+
 
 /* -------------------------------------- CAN_get API Relevant ----------------------------------------------------- */
+
+/**
+ * @brief 获取指定 CAN 实例的 HAL 句柄指针
+ * @param instance CAN 外设实例（CAN1/CAN2/CAN3）
+ * @return 指向 CAN_HandleTypeDef 的指针，若实例无效或超出范围则返回 NULL
+ *
+ * @note 该函数用于内部驱动获取 HAL 句柄，也可供用户在需要直接调用 HAL 库函数时使用。
+ *       返回的句柄由驱动在初始化时创建并维护，用户不应修改其内容。
+ *       调用前需确保 CAN 已初始化（否则可能返回 NULL）。
+ *
+ * @warning **返回的句柄指针仅当对应的 CAN 实例已通过 Cus_CAN_Init 或快速配置函数初始化后才有效**。
+ */
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance )
 {
   if ( !instance )   return NULL;
@@ -352,6 +496,20 @@ CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance )
 }
 
 
+/**
+ * @brief 获取 CAN 当前通信速率信息
+ * @param instance CAN 外设实例（CAN1/CAN2/CAN3）
+ * @param pOutInfo 指向速率信息结构体的指针，用于存储结果
+ * @return HAL_OK 成功；HAL_ERROR 参数无效或读取失败
+ *
+ * @note 该函数通过读取 CAN 控制器的 BTR 寄存器获取当前配置的预分频器、BS1、BS2，
+ *       并根据 APB1 时钟频率（HAL_RCC_GetPCLK1Freq()）计算实际波特率。
+ *       返回的波特率为浮点数，可能因整数运算存在微小舍入误差。
+ *       调用前需确保 CAN 已初始化（否则 BTR 寄存器可能为默认值，导致信息无效）。
+ *
+ * @warning 该函数假设 CAN 时钟来自 APB1 总线（适用于 STM32F1 系列）。若芯片 CAN 时钟源不同，
+ *          请自行修改内部时钟获取函数或覆盖此函数。
+ */
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo )
 {
   if ( !instance || !pOutInfo )   return HAL_ERROR;
@@ -455,6 +613,20 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
 }
 
 
+/**
+ * @brief 启动指定 CAN 外设（使能正常通信）
+ * @param instance CAN 外设实例（CAN1/CAN2/CAN3）
+ * @return HAL_OK 成功；HAL_ERROR 实例无效或启动失败
+ *
+ * @note 该函数调用 HAL_CAN_Start 启动 CAN 外设，使其进入正常工作模式。
+ *       启动后，CAN 控制器才能发送和接收消息。
+ *       若启动失败，会调用 Cus_CANStartFailed_Hook 弱函数，用户可覆盖以自定义错误处理。
+ *       该函数通常在配置完过滤器后调用，且仅在 CAN 初始化完成且未启动时使用。
+ *       重复调用不会产生副作用，但建议避免。
+ *
+ * @warning 启动前请确保 CAN 已通过 Cus_CAN_Init 初始化，且时钟和 GPIO 已正确配置。
+ *          若使能了接收中断，需在启动后再使能中断（或先启动后使能）。
+ */
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance )
 {
   if ( !instance )  return HAL_ERROR;
@@ -515,19 +687,50 @@ static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeD
 }
 
 
-static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t RxFifoIndex )
+static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo )
 {
   if ( !pDev || !pHeader || !Recv_Buf )   return HAL_ERROR;
 
-  if ( RxFifoIndex == 0 )
+  if ( RxFifo != CAN_RX_FIFO0 && RxFifo != CAN_RX_FIFO1 )   return HAL_ERROR;
+
+  bool is_RxITEnb = pDev->CheckInterrupt( pDev, CAN_IT_RX_FIFO0_MSG_PENDING );
+  if ( is_RxITEnb )   return HAL_BUSY;    // 检查中断. 若接收中断开启，则不允许再调用该API.
+
+  return HAL_CAN_GetRxMessage(pDev->canHandle, RxFifo, pHeader, Recv_Buf);
+}
+
+
+static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf )
+{
+  if ( !pDev || !pDev->canHandle || !pHeader || !Recv_Buf )   return HAL_ERROR;
+
+  bool is_RxFifo0IT_Enb = pDev->CheckInterrupt(pDev, CAN_IT_RX_FIFO0_MSG_PENDING);
+  bool is_RxFifo1IT_Enb = pDev->CheckInterrupt(pDev, CAN_IT_RX_FIFO1_MSG_PENDING);
+
+  if ( !is_RxFifo0IT_Enb && !is_RxFifo1IT_Enb )
   {
-    return HAL_CAN_GetRxMessage(pDev->canHandle, CAN_RX_FIFO0, pHeader, Recv_Buf);
+    // FIFO1接收中断 与 FIFO2 接收中断均未开启. 空调用.
+    return HAL_ERROR;
   }
-  else if ( RxFifoIndex == 1 )
+
+  Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
+  if ( !pPrivate->RxBuffer || !pPrivate->pRing )
   {
-    return HAL_CAN_GetRxMessage(pDev->canHandle, CAN_RX_FIFO1, pHeader, Recv_Buf);
+    // 缓冲区未注册. 空调用.
+    return HAL_ERROR;
   }
-  else return HAL_ERROR;
+  if ( pPrivate->head == pPrivate->tail )
+  {
+    // 缓冲区为空. 无可接收数据.
+    return HAL_ERROR;
+  }
+
+  Cus_CAN_RxMsg_t *pMsg = &pPrivate->pRing[pPrivate->tail];
+  *pHeader = pMsg->RxHeader;
+  memcpy(Recv_Buf, pMsg->RxData, pMsg->RxHeader.DLC);
+  pPrivate->tail = (pPrivate->tail + 1) % pPrivate->max_msgNum;
+
+  return HAL_OK;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -729,39 +932,93 @@ void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MAS
 }
 
 
-
-/*
-  Default Fault Hook Defines.
-  错误处理相关Hook函数默认定义.
-*/
-/* ------------------------------------------------------------------------- */
-__weak void Cus_FilterConfigFailed_Hook( CAN_HandleTypeDef *hcan, const CANFilterConfig_t *pFilterConf, HAL_StatusTypeDef hal_status )
+/**
+ * @brief 注册用户提供的缓冲区作为接收环形缓冲区
+ * @param pDev    指向 CAN 设备对象的指针
+ * @param pBuffer 用户提供的缓冲区起始地址，大小至少为 sizeof(Cus_CAN_RxMsg_t)
+ * @param size    缓冲区总大小（字节）
+ * @return 0     成功
+ * @return 0xFF  失败（参数无效、缓冲区过小或内存不足）
+ *
+ * @note 该函数将用户提供的缓冲区注册为接收环形缓冲区，用于中断接收模式。
+ *       注册后，CAN 接收中断会将收到的消息存入此缓冲区，用户可通过
+ *       Receive_IT 函数读取。
+ *       缓冲区大小需至少能容纳一条消息（sizeof(Cus_CAN_RxMsg_t)），
+ *       建议大小为消息结构体大小的整数倍，以获得最大利用率。
+ *       注册操作应在使能接收中断之前完成，否则中断到来时可能无可用缓冲区。
+ *       缓冲区内容在注册时会被清零，且由用户负责分配和管理（驱动不会释放）。
+ *
+ * @warning 若同时使用 FIFO0 和 FIFO1 的中断，两者会共用同一缓冲区，
+ *          消息将按到达顺序混合存储。若需区分来源，请自行设计。
+ */
+static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size )
 {
-  UNUSED(hcan);
-  UNUSED(pFilterConf);
-  UNUSED(hal_status);
+  if ( !pDev || !pDev->canHandle || !pBuffer || size == 0 || size > UINT32_MAX )  return 0xFF;
+
+  Cus_CAN_Priv_t *pPri = (Cus_CAN_Priv_t *)pDev->private;
+  if ( !pPri )    return 0xFF;
+
+  if ( size < sizeof(Cus_CAN_RxMsg_t) )   return 0xFF;  // 检查缓冲区大小是否至少能容纳一个消息.
+
+  pPri->buffer_Size = size;
+  pPri->max_msgNum = size / sizeof(Cus_CAN_RxMsg_t);
+  pPri->head = 0;
+  pPri->tail = 0;
+  pPri->pRing = (Cus_CAN_RxMsg_t *)pBuffer;
+  pPri->RxBuffer = pBuffer;
+  memset(pPri->RxBuffer, 0, size);
+
+  return 0;
 }
 
 
-__weak void Cus_CANInitFailed_Hook( CAN_HandleTypeDef *hcan, const CANInitConfig_t *pInitConf, HAL_StatusTypeDef hal_status )
+/**
+ * @brief 中断回调中调用，将收到的 CAN 消息存入环形缓冲区
+ * @param pDev 指向 CAN 设备对象的指针
+ * @param FIFO 接收 FIFO 标识（CAN_RX_FIFO0 或 CAN_RX_FIFO1）
+ *
+ * @note 该函数由 HAL_CAN_RxFifo0MsgPendingCallback 或 HAL_CAN_RxFifo1MsgPendingCallback
+ *       等中断回调中调用，用于将收到的消息写入用户注册的环形缓冲区。
+ *       调用前需确保已通过 Cus_CAN_registerRXBuffer 注册了有效缓冲区。
+ *       若缓冲区已满，该函数会读取一次 FIFO 以清除中断标志（丢弃该消息），
+ *       并调用 Cus_CANRecvITFull_Hook 通知用户。
+ *       若读取失败，则调用 Cus_CANRecvITFailed_Hook。
+ *       该函数应仅在中断上下文中执行，且要求 RX0 和 RX1 中断优先级相同，
+ *       以避免环形缓冲区 head 指针竞争。
+ *
+ * @warning 用户不应手动调用此函数，它由驱动内部的中断回调自动触发。
+ *          使用前务必先注册缓冲区，否则函数会直接返回，导致中断标志无法清除（可能死循环）。
+ */
+void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
 {
-  UNUSED(hcan);
-  UNUSED(pInitConf);
-  UNUSED(hal_status);
-}
+  if ( !pDev || !pDev->canHandle )  return;
 
+  if ( ((Cus_CAN_Priv_t *)pDev->private)->RxBuffer == NULL || ((Cus_CAN_Priv_t *)pDev->private)->pRing == NULL )  // 用户未注册缓冲区.
+  {
+    return;   // 缓冲区未注册. 直接返回.
+  }
 
-__weak void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef hal_status )
-{
-  UNUSED(hcan);
-  UNUSED(hal_status);
-}
+  Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
+  uint16_t next_head = ( pPrivate->head + 1 ) % pPrivate->max_msgNum; // 计算下一个写入位置.
+  if ( next_head == pPrivate->tail )
+  {
+    // 缓冲区写满. 数据丢失.
+    // 读取一次FIFO. 清除中断.
+    Cus_CAN_RxMsg_t dummy_msg;
+    HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &dummy_msg.RxHeader, dummy_msg.RxData);
 
+    // 自定义处理机制.
+    Cus_CANRecvITFull_Hook( pDev );
+    return;
+  }
 
-__weak void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status )
-{
-  UNUSED(pDev);
-  UNUSED(hal_status);
+  Cus_CAN_RxMsg_t *Msg = &pPrivate->pRing[pPrivate->head];
+  if ( HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &Msg->RxHeader, Msg->RxData) != HAL_OK )
+  {
+    Cus_CANRecvITFailed_Hook(pDev);
+    return;
+  }
+  pPrivate->head = next_head;
 }
 
 
@@ -854,4 +1111,123 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *
 }
 
 
+
+/**
+ * @brief 配置 CAN 中断的 NVIC 优先级（弱函数，可覆盖）
+ * @param pDev 指向 CAN 设备对象的指针
+ *
+ * @note 该函数由驱动在使能中断时自动调用（例如在 Cus_CAN_EnbIT 中），
+ *       用户不应手动调用此函数，否则可能导致 NVIC 配置与中断使能状态不一致。
+ *
+ * @note 默认实现根据当前已使能的中断类型（通过 CheckInterrupt 查询 IER 寄存器）
+ *       动态开启对应的 NVIC 中断向量，并为每个向量设置优先级 5（抢占优先级 5，子优先级 0）.
+ *
+ * @note 用户可以覆盖此函数以自定义中断优先级、增加或减少需要使能的 NVIC 通道.
+ *       覆盖后，请确保在函数内根据实际需求配置 NVIC，且不要手动调用原函数.
+ *
+ * @warning 不建议手动调用此函数，因为驱动会在合适的时机自动调用它.
+ * 
+ * @warning 如果同时使用 FIFO0 和 FIFO1 的中断，必须为这两个中断设置相同的优先级，
+ *          否则可能会导致环形缓冲区数据错乱。默认实现中两者均为优先级 5，更改时请格外注意.
+ */
+__attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
+{
+  #warning "Ensure RX0 and RX1 interrupts have same priority to avoid ring buffer corruption."
+
+  if ( !pDev || !pDev->canHandle )  return;
+
+  if ( pDev->Instance == CAN1 )
+  {
+    // 检查是否使能  接收中断.
+    bool is_RecvRx0_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev ,CAN_IT_RX_FIFO0_MSG_PENDING);
+    bool is_RecvRx0Full_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO0_FULL);
+    bool is_RecvRx0OverRun_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO0_OVERRUN);
+    if ( is_RecvRx0_IT || is_RecvRx0Full_IT || is_RecvRx0OverRun_IT )
+    {
+      HAL_NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, 5, 0);
+      HAL_NVIC_EnableIRQ(USB_LP_CAN1_RX0_IRQn);
+    }
+
+    bool is_RecvRx1_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO1_MSG_PENDING);
+    bool is_RecvRx1Full_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO1_FULL);
+    bool is_RecvRx1OverRun_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO1_OVERRUN);
+    if ( is_RecvRx1_IT || is_RecvRx1Full_IT || is_RecvRx1OverRun_IT )
+    {
+      HAL_NVIC_SetPriority(CAN1_RX1_IRQn, 5, 0);
+      HAL_NVIC_EnableIRQ(CAN1_RX1_IRQn);
+    }
+
+    bool is_TxMailBoxCplt_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_TX_MAILBOX_EMPTY);
+    if ( is_TxMailBoxCplt_IT )
+    {
+      HAL_NVIC_SetPriority(USB_HP_CAN1_TX_IRQn, 5, 0);
+      HAL_NVIC_EnableIRQ(USB_HP_CAN1_TX_IRQn);
+    }
+
+    bool is_Error_WakeUP_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_WAKEUP);
+    bool is_Error_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_ERROR);
+    bool is_Error_Sleep_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_SLEEP_ACK);
+    bool is_Error_Passive_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_ERROR_PASSIVE);
+    bool is_Error_Busoff_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_BUSOFF);
+    if ( is_Error_WakeUP_IT || is_Error_IT || is_Error_Sleep_IT || is_Error_Passive_IT || is_Error_Busoff_IT )
+    {
+      HAL_NVIC_SetPriority(CAN1_SCE_IRQn, 5, 0);
+      HAL_NVIC_EnableIRQ(CAN1_SCE_IRQn);
+    }
+
+  }
+  #if defined(CAN2)
+    if ( pDev->Instance == CAN2 )
+    {
+      /* 待实现 */
+    }
+  #endif // CAN2
+
+  #if defined(CAN3)
+    if ( pDev->Instance == CAN3 )
+    {
+      /* 待实现 */
+    }
+  #endif // CAN3
+}
+
+
 /* ------------------------------------------------------------------------- */
+
+
+
+/* -------------------------------- Default Feature ------------------------------------ */
+#if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+  void Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev )
+  {
+    if ( !pDev || !pDev->canHandle )    return;
+
+    if ( pDev->RingFIFOFull_Count >= MAX_FIFO_FULL_COUNT )   return;
+
+    Cus_CAN_Priv_t *Private = (Cus_CAN_Priv_t *)pDev->private;
+    size_t total_size = Private->buffer_Size + 2 * sizeof(uint16_t);  
+
+#warning "if malloc failed. Plz check your heap_size."
+    uint8_t * const pBackup = (uint8_t *)malloc(total_size);   // 多开辟四个4字节用于存储 head tail等关键信息.
+    if ( !pBackup )   return;       // 空间申请失败. 处理失效.
+
+    uint8_t *pWrite = pBackup;
+    *(volatile uint16_t *)pWrite = Private->head;
+    pWrite += sizeof(uint16_t);
+
+    *(volatile uint16_t *)pWrite = Private->tail;
+    pWrite += sizeof(uint16_t);
+
+    memcpy(pWrite, Private->RxBuffer, Private->buffer_Size);
+    // memset(Private->RxBuffer, 0, Private->buffer_Size);  // 拷贝后清除原缓冲区数据(可选，为了性能考虑此处关闭).
+
+    // 状态复原.
+    Private->head = 0;
+    Private->tail = 0;
+    pDev->pBackUPRecv_Buf[pDev->RingFIFOFull_Count] = (void *)pBackup;
+    pDev->RingFIFOFull_Count++;
+    pDev->is_RingFIFO_Full = true;
+  }
+#endif // USE_DEFAULT_RxFIFO_FULL_HOOK
+/* ------------------------------------------------------------------------------------- */
+

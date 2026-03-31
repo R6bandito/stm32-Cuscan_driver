@@ -26,6 +26,19 @@
 #include <string.h>
 
 
+/* *************** Feature ****************** */
+  #define USE_DEFAULT_RxFIFO_FULL_HOOK  (1)
+    #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+      #define MAX_FIFO_FULL_COUNT  (5)
+    #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
+
+
+
+
+
+/* ******************************************* */
+
+
 /* *************** Define ****************** */
   #define MAX_SUPPORT_CANDEV             (3)
   #define CAN1_INDEX                     (0)
@@ -159,14 +172,33 @@ struct CANFilterConfig_t
 };
 
 
+/* 环形缓冲区元素：一条完整的 CAN 消息 */
+typedef struct 
+{
+  CAN_RxHeaderTypeDef RxHeader;
+  uint8_t RxData[8];
+
+} Cus_CAN_RxMsg_t;
+
+
 typedef struct Cus_CAN_Device Cus_CAN_Device_t;
 struct Cus_CAN_Device
 {
   CAN_TypeDef *Instance;
   CAN_HandleTypeDef *canHandle;
-  HAL_StatusTypeDef (*Send)( const Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
-  HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t RxFifoIndex );
+  HAL_StatusTypeDef (*Send)( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
+  HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
+  HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf );
+  HAL_StatusTypeDef (*EnableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
+  bool (*CheckInterrupt)( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
+  uint8_t (*registerRxBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
 
+  void *private;
+  #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+    void **pBackUPRecv_Buf;
+    bool is_RingFIFO_Full;
+    uint8_t RingFIFOFull_Count;
+  #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 };
 
 
@@ -181,6 +213,7 @@ typedef struct
 } Cus_CAN_RateInfo_t;
 
 
+
 /* ******************************************* */
 
 
@@ -190,7 +223,7 @@ uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
 uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
-const Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 /* ----------------------------------------------------------------- */
 
@@ -278,7 +311,6 @@ HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
    * @param   Filter_MASK_RTR RTR 匹配模式（同 SetStdMask32），**两个过滤器共用此设置,请注意**。
    * @param   id1, id1_mask   第一个过滤器的 ID 和掩码。
    * @param   id2, id2_mask   第二个过滤器的 ID 和掩码。
-   * @note    调用后需设置 FilterMode = Cus_CAN_MODE_IDMASK, FilterScale = Cus_CAN_SCALE_16BIT。
    * @note    两个过滤器独立工作，可分别匹配不同 ID。
  */
     void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask );
@@ -287,10 +319,14 @@ HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 
 
 /* ----------------------------------------------------------------- */
-__weak void Cus_FilterConfigFailed_Hook( CAN_HandleTypeDef *hcan, const CANFilterConfig_t *pFilterConf, HAL_StatusTypeDef hal_status );
-__weak void Cus_CANInitFailed_Hook( CAN_HandleTypeDef *hcan, const CANInitConfig_t *pInitConf, HAL_StatusTypeDef hal_status );
-__weak void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef hal_status );
-__weak void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status );
+void Cus_FilterConfigFailed_Hook( CAN_HandleTypeDef *hcan, const CANFilterConfig_t *pFilterConf, HAL_StatusTypeDef hal_status );
+void Cus_CANInitFailed_Hook( CAN_HandleTypeDef *hcan, const CANInitConfig_t *pInitConf, HAL_StatusTypeDef hal_status );
+void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef hal_status );
+void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status );
+void Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev );
+void Cus_CANRecvITFailed_Hook ( Cus_CAN_Device_t *pDev );
+
+void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev );
 
 
 
