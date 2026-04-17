@@ -18,7 +18,6 @@
 
 /* ------------------------------------------------------------------- */
 extern void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
-
 /* ------------------------------------------------------------------- */
 
 
@@ -56,6 +55,13 @@ void HAL_CAN_RxFifo0MsgPendingCallback( CAN_HandleTypeDef *hcan )
     /* Don't Change this filed code!*/
     {
       Cus_CAN_RingRecvIT( Cus_CAN_getControlBlock(hcan->Instance), CAN_RX_FIFO0 );
+      #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+        Cus_CAN_Device_t * pDev = Cus_CAN_getControlBlock(hcan->Instance);
+        CAN_RxHeaderTypeDef RxHeader;
+        U8 buffer[8];
+        pDev->Receive_IT(pDev, &RxHeader, buffer);
+        Cus_Cantp_RecieveFrame(buffer, RxHeader.DLC, RxHeader.StdId);
+      #endif 
     }
     /* Your Code Here. */
     {
@@ -86,6 +92,13 @@ void HAL_CAN_RxFifo1MsgPendingCallback( CAN_HandleTypeDef *hcan )
     /* Don't Change this filed code!*/
     {
       Cus_CAN_RingRecvIT( Cus_CAN_getControlBlock(hcan->Instance), CAN_RX_FIFO1 );
+      #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+        Cus_CAN_Device_t * pDev = Cus_CAN_getControlBlock(hcan->Instance);
+        CAN_RxHeaderTypeDef RxHeader;
+        U8 buffer[8];
+        pDev->Receive_IT(pDev, &RxHeader, buffer);
+        Cus_Cantp_RecieveFrame(buffer, RxHeader.DLC, RxHeader.StdId);
+      #endif 
     }
     /* Your Code Here. */
     {
@@ -137,6 +150,11 @@ void HAL_CAN_TxMailbox0CompleteCallback( CAN_HandleTypeDef *hcan )
 {
   if ( hcan->Instance == CAN1 )
   {
+    {
+      #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+        Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 1);
+      #endif
+    }
     // Your Code Here.
     {
 
@@ -149,6 +167,11 @@ void HAL_CAN_TxMailbox1CompleteCallback( CAN_HandleTypeDef *hcan )
 {
   if ( hcan->Instance == CAN1 )
   {
+    {
+      #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+        Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 2);
+      #endif
+    }
     // Your Code Here.
     {
 
@@ -161,6 +184,11 @@ void HAL_CAN_TxMailbox2CompleteCallback( CAN_HandleTypeDef *hcan )
 {
   if ( hcan->Instance == CAN1 )
   {
+    {
+      #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+        Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 4);
+      #endif
+    }
     // Your Code Here.
     {
 

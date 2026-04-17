@@ -25,15 +25,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* 默认不包含配套的CANTP. */
+// #include "Cus_CANTP.h"
+
 
 /* *************** Feature ****************** */
   #define USE_DEFAULT_RxFIFO_FULL_HOOK  (1)
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       #define MAX_FIFO_FULL_COUNT  (5)
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
-
-
-
 
 
 /* ******************************************* */
@@ -366,5 +366,11 @@ __weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CA
 /* ----------------------------------------------------------------- */
 
 
+/* 注意: 以下方法仅在包含 Cus配套的 CANTP 头文件后启用. */
+#ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+  U8 Cus_CanTP_canSendFunc_Asynchronous( Cus_CANTp_Conn_t *pConn, U32 canId, const U8* data, U16 dlc );  // 异步
+
+  U8 Cus_CanTP_canRecvFunc_Asynchronous( Cus_CANTp_Conn_t *pConn, U32 *pcanId, U8 *pData, U8 *pDlc );
+#endif // __Cus_CANTP_XzzwY7a9BBCTQ7__
 
 #endif // __CAN_CUS_H__

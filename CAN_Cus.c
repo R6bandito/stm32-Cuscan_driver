@@ -27,6 +27,10 @@ typedef struct Cus_Private
 } Cus_CAN_Priv_t;
 /* ---------------------------------------------------------------------------- */
 
+#ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+  U8 Cus_CanTP_canSendFunc_Asynchronous( Cus_CANTp_Conn_t *pConn, U32 canId, const U8* data, U16 dlc );
+  U8 Cus_CanTP_canRecvFunc_Asynchronous( Cus_CANTp_Conn_t *pConn, U32 *pcanId, U8 *pData, U8 *pDlc );
+#endif // __Cus_CANTP_XzzwY7a9BBCTQ7__
 
 /* ------------------- Default Feature Declare --------------------- */
 
@@ -1039,7 +1043,7 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
   pInit->Instance = instance;
   pInit->Mode = MODE_NORMAL;
   pInit->is_AutoBusOff = false;
-  pInit->is_AutoRestransmission = true;
+  pInit->is_AutoRestransmission = false;
   pInit->is_AutoWakeUP = false;
   pInit->is_ReceiveFifoLocked = false;
   pInit->is_TimeTriggeredMode = false;
@@ -1230,4 +1234,55 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
   }
 #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 /* ------------------------------------------------------------------------------------- */
+
+
+#ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
+  U8 Cus_CanTP_canSendFunc_Asynchronous( Cus_CANTp_Conn_t *pConn, U32 canId, const U8* data, U16 dlc )
+  {
+    if ( !pConn || !data || dlc < 8 )   return 0;  // 用于采用填充机制. 所以dlc(数据场长度)必须 >= 8. == 8为经典CAN2.0. > 8 为CAN FD形式.
+
+    CAN_TypeDef *CANInstance = (CAN_TypeDef *)pConn->BindCANDevice;
+    Cus_CAN_Device_t * pDev = Cus_CAN_getControlBlock(CANInstance);
+    if ( !pDev )  return 0;   // Device 对象获取失败. 返回.
+
+    CAN_TxHeaderTypeDef TxHeader;
+    TxHeader.DLC = dlc;
+    TxHeader.RTR = CAN_RTR_DATA;
+    TxHeader.StdId = (canId & 0x7FF);
+    TxHeader.TransmitGlobalTime = DISABLE;
+    TxHeader.IDE = CAN_ID_STD;    // 先写死STD标准11位ID模式. 后续待拓展为 29位 EXT拓展ID模式.
+
+    U32 Txmailbox;
+    HAL_StatusTypeDef ret = HAL_CAN_AddTxMessage(pDev->canHandle, &TxHeader, data, &Txmailbox); 
+    if ( ret != HAL_OK )    return 0;   // 发送失败. 无空闲邮箱或硬件错误.
+
+    // 记录使用的邮箱号到连接句柄（用于中断回调匹配）
+    pConn->TxMailBoxIndex = (U8)Txmailbox;
+
+    return 1;
+  }
+
+
+  U8 Cus_CanTP_canRecvFunc_Asynchronous( Cus_CANTp_Conn_t *pConn, U32 *pcanId, U8 *pData, U8 *pDlc )
+  {
+    if ( !pConn || !pConn->BindCANDevice || !pcanId || !pData || !pDlc )   return 0;
+
+    CAN_TypeDef *Instance = (CAN_TypeDef *)pConn->BindCANDevice;
+    Cus_CAN_Device_t *pDev = Cus_CAN_getControlBlock(Instance);
+    if ( !pDev )  return 0;
+
+    CAN_RxHeaderTypeDef RxHeader;
+    U8 rxdata[8];                   // 经典CAN. 8帧数据段.
+    if ( pDev->Receive_IT && pDev->Receive_IT(pDev, &RxHeader, rxdata) == HAL_OK )
+    {
+      if ( RxHeader.IDE == CAN_ID_STD )   *pcanId = RxHeader.StdId;
+
+      *pDlc = RxHeader.DLC;
+      memcpy(pData, rxdata, RxHeader.DLC);
+      return 1;
+    }
+
+    return 0;
+  }
+#endif // __Cus_CANTP_XzzwY7a9BBCTQ7__
 
