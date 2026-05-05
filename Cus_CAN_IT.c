@@ -18,6 +18,7 @@
 
 /* ------------------------------------------------------------------- */
 extern void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
+extern void Cus_CAN_FeedCanTP(Cus_CAN_Device_t *pDev);
 /* ------------------------------------------------------------------- */
 
 
@@ -154,6 +155,14 @@ void HAL_CAN_TxMailbox0CompleteCallback( CAN_HandleTypeDef *hcan )
       #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
         Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 1);
       #endif
+
+      #if (USE_SEND_ASYNC)
+        Cus_CAN_Device_t *pDev = Cus_CAN_getControlBlock(hcan->Instance);
+        if ( pDev )
+        {
+          Cus_CAN_ProcessTxQueue(pDev);
+        }
+      #endif 
     }
     // Your Code Here.
     {

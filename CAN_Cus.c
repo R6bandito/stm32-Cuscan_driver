@@ -4,10 +4,22 @@
 /* ------------------------ g_Ver & Static Ver -------------------------------- */
 static CAN_HandleTypeDef canHandle[MAX_SUPPORT_CANDEV] = { 0 };
 static Cus_CAN_Device_t *CanDevice[MAX_SUPPORT_CANDEV];
+static uint8_t s_CanDeviceUsed[MAX_SUPPORT_CANDEV];
+
 
 #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
   void *g_pBackUP_Array[MAX_FIFO_FULL_COUNT];
 #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
+
+#if (USE_SEND_ASYNC) && (!SEND_ASYNC_NodePOLL_DYNAMIC)
+  static TxMsgNode_t s_TxNodePoll[TX_NODE_POLL_SIZE];           // 空闲节点内存池.
+  static TxMsgNode_t *s_TxNodeFreeStack[TX_NODE_POLL_SIZE];     // 空闲节点指针栈.
+
+  uint8_t TxFreeStackIndex;    // 空闲节点指针栈栈顶索引.
+  uint8_t FreeStackCount;       // 剩余空闲节点数目.
+  bool is_NodePollInit = false;
+#endif // USE_SEND_ASYNC
+
 
 
 // Device结构 私有变量.用户不允许直接访问.
@@ -24,7 +36,21 @@ typedef struct Cus_Private
 
   Cus_CAN_RxMsg_t *pRing;        // 将 pBuffer 强制转换为 Cus_CAN_RxMsg_t* 后的指针
 
+  #if (USE_SEND_ASYNC)
+    TxMsgNode_t *TxHead;         // 发送队列头. 
+    TxMsgNode_t *TxTail;         // 发送队列尾.
+    TxMsgNode_t* TxCurrent;      // 当前正在发送的节点.
+    uint8_t TxBusy;              // 硬件发送忙碌标志.
+  #endif 
+
 } Cus_CAN_Priv_t;
+
+
+#if (!CAN_TCB_ALLOC_DYNAMIC)
+  // 静态分配内存池.
+  static Cus_CAN_Device_t s_CanDevicePool[MAX_SUPPORT_CANDEV];
+  static Cus_CAN_Priv_t s_CanDevicePriPool[MAX_SUPPORT_CANDEV];
+#endif // CAN_TCB_ALLOC_DYNAMIC
 /* ---------------------------------------------------------------------------- */
 
 #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
@@ -32,20 +58,21 @@ typedef struct Cus_Private
   U8 Cus_CanTP_canRecvFunc_Asynchronous( Cus_CANTp_Conn_t *pConn, U32 *pcanId, U8 *pData, U8 *pDlc );
 #endif // __Cus_CANTP_XzzwY7a9BBCTQ7__
 
-/* ------------------- Default Feature Declare --------------------- */
-
-/* ----------------------------------------------------------------- */
-
 
 /* ----------------------------------------------------------------- */
 uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
 uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
-HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+int8_t Factory_CANInitConfig_t_Static( uint8_t *buffer, uint32_t buffer_size );
+int8_t Factory_CANFilterConfig_t_Static( uint8_t *buffer, uint32_t buffer_size );
+
+int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
-void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
 
+HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
+void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
 
 void Cus_CAN_Filter_SetStdList32(  CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
 void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 );
@@ -53,7 +80,6 @@ void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR
 void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask );
 void Cus_CAN_Filter_SetExtMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint32_t id1, uint32_t id1_mask );
 void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask );
-
 
 static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
@@ -64,97 +90,282 @@ static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t *pConf_Structure );
 static bool CheckInterrupt( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
 static uint8_t createCANTCB( Cus_CAN_Device_t **pDevice, const CANInitConfig_t *pInit );
 static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t *pConf_Structure, CAN_TypeDef *instance );
+
 static void __release( CANInitConfig_t **pConf );
 static void __release_filter( CANFilterConfig_t **pFilter );
+static void __canTCB_release( Cus_CAN_Device_t ** pDevice );
+
 static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, uint32_t *prescaler, uint32_t *pbs1, uint32_t *pbs2);
+
+#if (!CAN_TCB_ALLOC_DYNAMIC)
+  static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice );
+#endif 
+
+#if (!CAN_CFG_ALLOC_DYNAMIC)
+  static void __release_static( CANInitConfig_t **pConf );
+  static void __release_filter_static( CANFilterConfig_t **pFilter );
+#endif 
+
+#if (USE_SEND_ASYNC)
+  static void Cus_CAN_NodePollInit( Cus_CAN_Device_t *pDev );
+  static void Cus_CAN_FreeNode( TxMsgNode_t *pNode );
+  static HAL_StatusTypeDef Cus_CAN_Send_IT( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
+  void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
+#endif 
 /* ----------------------------------------------------------------- */
 
 
-uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig )
-{
-  #warning "The param pOutConfig Must be global ver.Otherwise you will lose the memory that created by DynamicAlloc."
-  /* 注意: 传入的 pOutConfig 参数必须是对应调用层的全局变量.若为局部变量，则会丢失通过动态分配的内存从而造成内存泄漏！ */
+#if (CAN_CFG_ALLOC_DYNAMIC)
+  uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig )
+  {
+    #warning "The param pOutConfig Must be global ver.Otherwise you will lose the memory that created by DynamicAlloc."
+    /* 注意: 传入的 pOutConfig 参数必须是对应调用层的全局变量.若为局部变量，则会丢失通过动态分配的内存从而造成内存泄漏！ */
 
-  if ( !pOutConfig )  return 0xFF;
+    if ( !pOutConfig )  return 0xFF;
 
-  CANInitConfig_t *pReturn = (CANInitConfig_t *)malloc(sizeof(CANInitConfig_t));
-  if ( pReturn == NULL )  return 0xFF;
-  *pOutConfig = pReturn;
+    CANInitConfig_t *pReturn = (CANInitConfig_t *)malloc(sizeof(CANInitConfig_t));
+    if ( pReturn == NULL )  return 0xFF;
+    *pOutConfig = pReturn;
 
-  memset(*pOutConfig, 0, sizeof(CANInitConfig_t));
-  (**pOutConfig).Cus_CAN_Init = cus_canInit;
-  (**pOutConfig).Self_Release = __release;
-  (**pOutConfig).is_DynamicAlloc = true;
-  return 0;
-}
-
-
-uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig )
-{
-  if ( !pOutConfig )  return 0xFF;
-
-  /* 注意: 传入的 pOutConfig 参数必须是对应调用层的全局变量.若为局部变量，则会丢失通过动态分配的内存从而造成内存泄漏！ */
-  CANFilterConfig_t *pReturn = (CANFilterConfig_t *)malloc(sizeof(CANFilterConfig_t));
-  if ( pReturn == NULL )  return 0xFF;
-  *pOutConfig = pReturn;
-
-  memset(*pOutConfig, 0, sizeof(CANFilterConfig_t));
-  (*pOutConfig)->Cus_CAN_FilterInit = cus_canfilterInit;
-  (*pOutConfig)->Self_Release = __release_filter;
-  (*pOutConfig)->is_DynamicAlloc = true;
-  return 0;
-}
+    memset(*pOutConfig, 0, sizeof(CANInitConfig_t));
+    (**pOutConfig).Cus_CAN_Init = cus_canInit;
+    (**pOutConfig).Self_Release = __release;
+    (**pOutConfig).is_DynamicAlloc = true;
+    return 0;
+  }
 
 
+  uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig )
+  {
+    if ( !pOutConfig )  return 0xFF;
+
+    /* 注意: 传入的 pOutConfig 参数必须是对应调用层的全局变量.若为局部变量，则会丢失通过动态分配的内存从而造成内存泄漏！ */
+    CANFilterConfig_t *pReturn = (CANFilterConfig_t *)malloc(sizeof(CANFilterConfig_t));
+    if ( pReturn == NULL )  return 0xFF;
+    *pOutConfig = pReturn;
+
+    memset(*pOutConfig, 0, sizeof(CANFilterConfig_t));
+    (*pOutConfig)->Cus_CAN_FilterInit = cus_canfilterInit;
+    (*pOutConfig)->Self_Release = __release_filter;
+    (*pOutConfig)->is_DynamicAlloc = true;
+    return 0;
+  }
+
+#endif // CAN_CFG_ALLOC_DYNAMIC
+
+
+
+#if (!CAN_CFG_ALLOC_DYNAMIC)
+  int8_t Factory_CANInitConfig_t_Static( uint8_t *buffer, uint32_t buffer_size )
+  {
+    if ( !buffer || buffer_size == 0 )    return -1;
+
+    CANInitConfig_t canInitStructure = { 0 };
+    canInitStructure.Cus_CAN_Init = cus_canInit;
+    canInitStructure.is_DynamicAlloc = false;
+    canInitStructure.Self_Release = __release_static;
+
+    if ( buffer_size < sizeof(canInitStructure) + 1 )   return -2;
+    memcpy(buffer, &canInitStructure, sizeof(canInitStructure));
+
+    return 0;
+  }
+
+
+  int8_t Factory_CANFilterConfig_t_Static( uint8_t *buffer, uint32_t buffer_size )
+  {
+    if ( !buffer || buffer_size == 0 )    return -1;
+
+    CANFilterConfig_t canFilterStructure = { 0 };
+    canFilterStructure.Cus_CAN_FilterInit = cus_canfilterInit;
+    canFilterStructure.Self_Release = __release_filter_static;
+    canFilterStructure.is_DynamicAlloc = false;
+
+    if ( buffer_size < sizeof(canFilterStructure) + 1 )    return -2;
+    memcpy(buffer, &canFilterStructure, sizeof(canFilterStructure));
+
+    return 0;
+  }
+
+  static void __release_static( CANInitConfig_t **pConf ) { UNUSED(pConf); }   // 采用静态分配的内存由用户自行进行管理，此处release仅作占位.
+
+  static void __release_filter_static( CANFilterConfig_t **pFilter ) { UNUSED(pFilter); }
+
+
+/* 静态分配使用示例：
+  * uint8_t init_buf[sizeof(CANInitConfig_t)];
+  *
+  * if (Factory_CANInitConfig_t_Static(init_buf, sizeof(init_buf)) != 0) 
+  * {
+  *     // 初始化失败
+  * }
+  * 
+  * CANInitConfig_t *pInit = (CANInitConfig_t*)init_buf;
+  * pInit->Instance = CAN1;
+  * // ... 修改其他参数 ...
+  * pInit->Cus_CAN_Init(pInit);
+  * 
+  * 过滤器类似:
+  * uint8_t filter_buf[sizeof(CANFilterConfig_t)];
+  * Factory_CANFilterConfig_t_Static(filter_buf, sizeof(filter_buf));
+  * CANFilterConfig_t *pFilter = (CANFilterConfig_t*)filter_buf;
+*/
+
+#endif 
 
 
 /* -------------------------------------- CAN_TCB Relevant ----------------------------------------------------- */
-static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t *pInit )
-{
-//  if ( !pDevice || !(*pDevice) )    return 0xFF;
-  if ( !pInit )   return 0xFF;
-
-  Cus_CAN_Device_t *pTCB = (Cus_CAN_Device_t *)malloc(sizeof(Cus_CAN_Device_t));
-  if ( pTCB == NULL )   return 0xFF;
-  *pDevice = pTCB;
-
-  Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)malloc(sizeof(Cus_CAN_Priv_t));
-  if ( pPrivate == NULL )   return 0xFF;
-  
-  pPrivate->RxBuffer = NULL;
-  pPrivate->head = 0;
-  pPrivate->tail = 0;
-  pPrivate->max_msgNum = 0;
-  pPrivate->buffer_Size = 0;
-  pPrivate->pRing = NULL;
-
-  memset(*pDevice, 0, sizeof(Cus_CAN_Device_t));
-  (*pDevice)->Instance = pInit->Instance;
-  (*pDevice)->canHandle = Cus_CAN_getHandle(pInit->Instance);
-  (*pDevice)->Send = Cus_CAN_Send;
-  (*pDevice)->Receive = Cus_CAN_Recv;
-  (*pDevice)->EnableInterrupt = Cus_CAN_EnbIT;
-  (*pDevice)->CheckInterrupt = CheckInterrupt;
-  (*pDevice)->registerRxBuffer = Cus_CAN_registerRXBuffer;
-  (*pDevice)->private = (void *)pPrivate;
-  (*pDevice)->Receive_IT = Cus_CAN_Recv_IT;
-
-  #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
-    (*pDevice)->is_RingFIFO_Full = false;
-    (*pDevice)->RingFIFOFull_Count = 0;
-    (*pDevice)->pBackUPRecv_Buf = g_pBackUP_Array;
-  #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
-
-  // 控制TCB不允许人为清理. 不注册清理函数.
-  return 0;
-}
-
 static void __canTCB_release( Cus_CAN_Device_t ** pDevice )
 {
   if ( !pDevice || !(*pDevice) )   return;
+
+  Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)((*pDevice)->private);
+  if ( pPriv )    free(pPriv);      // 先释放动态分配的成员.
+
   free(*pDevice);
+
   *pDevice = NULL;
 }
+
+
+int8_t Cus_CAN_getIndex( CAN_TypeDef *instance )
+{
+  if ( !instance )   return -1;
+
+  if ( instance == CAN1 )   return CAN1_INDEX;
+
+  #if defined(CAN2)
+    if ( instance == CAN2 )   return CAN2_INDEX;
+  #endif 
+
+  #if defined(CAN3)
+    if ( instance == CAN3 )   return CAN3_INDEX;
+  #endif 
+
+  return -2;
+}
+
+
+static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDevice); }
+
+#if (CAN_TCB_ALLOC_DYNAMIC)
+  static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t *pInit )
+  {
+    if ( !pInit )   return 0xFF;
+
+    int8_t index = Cus_CAN_getIndex(pInit->Instance);
+    if ( index < 0 )  return 0xFF;
+
+    if ( s_CanDeviceUsed[index] )    return 0xFF;    // 避免重复初始化.
+
+    Cus_CAN_Device_t *pTCB = (Cus_CAN_Device_t *)malloc(sizeof(Cus_CAN_Device_t));
+    if ( pTCB == NULL )   return 0xFF;
+    *pDevice = pTCB;
+
+    Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)malloc(sizeof(Cus_CAN_Priv_t));
+    if ( pPrivate == NULL )   return 0xFF;
+    
+    pPrivate->RxBuffer = NULL;
+    pPrivate->head = 0;
+    pPrivate->tail = 0;
+    pPrivate->max_msgNum = 0;
+    pPrivate->buffer_Size = 0;
+    pPrivate->pRing = NULL;
+
+    memset(*pDevice, 0, sizeof(Cus_CAN_Device_t));
+    (*pDevice)->Instance = pInit->Instance;
+    (*pDevice)->canHandle = Cus_CAN_getHandle(pInit->Instance);
+    (*pDevice)->Send = Cus_CAN_Send;
+    (*pDevice)->Receive = Cus_CAN_Recv;
+    (*pDevice)->EnableInterrupt = Cus_CAN_EnbIT;
+    (*pDevice)->CheckInterrupt = CheckInterrupt;
+    (*pDevice)->registerRxBuffer = Cus_CAN_registerRXBuffer;
+    (*pDevice)->private = (void *)pPrivate;
+    (*pDevice)->Receive_IT = Cus_CAN_Recv_IT;
+
+    #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+      (*pDevice)->is_RingFIFO_Full = false;
+      (*pDevice)->RingFIFOFull_Count = 0;
+      (*pDevice)->pBackUPRecv_Buf = g_pBackUP_Array;
+    #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
+
+    s_CanDeviceUsed[index] = 1;
+
+    // 控制TCB不允许人为清理. 不注册清理函数.
+    return 0;
+  }
+
+
+  static void __release( CANInitConfig_t **pConf )
+  {
+    if ( !pConf || !(*pConf) ) return;
+    if ( (*pConf)->is_DynamicAlloc != true ) return;
+    free(*pConf);
+    *pConf = NULL;
+  }
+
+
+  static void __release_filter( CANFilterConfig_t **pFilter )
+  {
+    if ( !pFilter || !(*pFilter) )  return;
+    if ( (*pFilter)->is_DynamicAlloc != true )  return;
+    free(*pFilter);
+    *pFilter = NULL;
+  }
+  #endif // CAN_TCB_ALLOC_DYNAMIC
+
+
+#if (!CAN_TCB_ALLOC_DYNAMIC)
+  static uint8_t createCANTCB( Cus_CAN_Device_t ** pDevice, const CANInitConfig_t *pInit )
+  {
+    if ( !pDevice || !pInit )   return 0xFF;
+
+    int8_t index = Cus_CAN_getIndex(pInit->Instance);
+    if ( index < 0 )  return 0xFF;
+
+    if ( s_CanDeviceUsed[index] )    return 0xFF;    // 检查该槽位是否已经被初始化过. 避免重复初始化.
+
+    Cus_CAN_Device_t *pTCB = &s_CanDevicePool[index];
+    Cus_CAN_Priv_t *pPriv = &s_CanDevicePriPool[index];
+
+    pPriv->RxBuffer = NULL;
+    pPriv->head = 0;
+    pPriv->tail = 0;
+    pPriv->max_msgNum = 0;
+    pPriv->pRing = NULL;
+    pPriv->buffer_Size = 0;
+
+    pTCB->Instance = pInit->Instance;
+    pTCB->canHandle = Cus_CAN_getHandle(pInit->Instance);
+    pTCB->Send = Cus_CAN_Send;
+
+    #if (USE_SEND_ASYNC)
+      pTCB->Send_IT = Cus_CAN_Send_IT;
+    #endif 
+
+    pTCB->Receive = Cus_CAN_Recv;
+    pTCB->EnableInterrupt = Cus_CAN_EnbIT;
+    pTCB->CheckInterrupt = CheckInterrupt;
+    pTCB->registerRxBuffer = Cus_CAN_registerRXBuffer;
+    pTCB->private = (void *)pPriv;
+    pTCB->Receive_IT = Cus_CAN_Recv_IT;
+
+    #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+      pTCB->is_RingFIFO_Full = false;
+      pTCB->RingFIFOFull_Count = 0;
+      pTCB->pBackUPRecv_Buf = g_pBackUP_Array;
+    #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
+
+    *pDevice = pTCB;
+    s_CanDeviceUsed[index] = 1;
+
+    #if (USE_SEND_ASYNC)
+      Cus_CAN_NodePollInit(*pDevice);     // 若开启异步发送. 则于此处进行初始化.
+    #endif 
+
+    return 0;   // Normal Back.
+  }
+#endif // CAN_TCB_ALLOC_DYNAMIC
 
 
 /**
@@ -171,44 +382,58 @@ static void __canTCB_release( Cus_CAN_Device_t ** pDevice )
  * @warning 返回的指针仅当 CAN 已初始化且设备对象有效时才可安全使用。
  *          设备对象在驱动生命周期内保持不变，用户无需释放。
  */
-Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance )
-{
-  if ( !instance )  return NULL;
+  Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance )
+  {
+    if ( !instance )  return NULL;
 
-  int idx = -1;
-  if ( instance == CAN1 )  idx = CAN1_INDEX;
-  #if defined(CAN2)
-    if ( instance == CAN2 ) idx = CAN2_INDEX;
-  #endif // CAN2
-  #if defined(CAN3)
-    if ( instance == CAN3 ) idx = CAN3_INDEX;
-  #endif // CAN3
+    int8_t index = Cus_CAN_getIndex(instance);
 
-  if ( idx < 0 || idx > MAX_SUPPORT_CANDEV )  return NULL;
+    if ( index < 0 || index > MAX_SUPPORT_CANDEV )  return NULL;
 
-  return CanDevice[idx];
-}
+    if ( !s_CanDeviceUsed[index] )    return NULL;    // 检查静态内存池对应的index是否已被CUS库正确初始化.
+
+    return CanDevice[index];
+  }
 /* --------------------------------------------------------------------------------------------------- */
 
 
-
-
-static void __release( CANInitConfig_t **pConf )
+void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev )
 {
-  if ( !pConf || !(*pConf) ) return;
-  if ( (*pConf)->is_DynamicAlloc != true ) return;
-  free(*pConf);
-  *pConf = NULL;
-}
+  if ( !pDev || !(*pDev) )    return;
 
+  CAN_HandleTypeDef *phcan = Cus_CAN_getHandle((*pDev)->Instance);
+  if ( !phcan )   return;
 
-static void __release_filter( CANFilterConfig_t **pFilter )
-{
-  if ( !pFilter || !(*pFilter) )  return;
-  if ( (*pFilter)->is_DynamicAlloc != true )  return;
-  free(*pFilter);
-  *pFilter = NULL;
-}
+  int8_t index = Cus_CAN_getIndex((*pDev)->Instance);
+  if ( index < 0 )   return;
+
+/* -------------- 复位 CAN 外设 ------------------ */
+  HAL_CAN_AbortTxRequest(phcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);   // 中止可能的Tx请求.
+
+  HAL_CAN_Stop(phcan);
+
+  HAL_CAN_DeInit(phcan);
+/* ---------------------------------------------- */
+
+  #if (CAN_TCB_ALLOC_DYNAMIC)
+    // 动态分配: 释放TCB与私有数据.
+    __canTCB_release(pDev);     // 释放后 *pDev 为NULL. 
+    CanDevice[index] = NULL;    // pDev也为NULL. 不能够再进行使用！ 除非重新初始化.
+  #endif 
+
+  #if (!CAN_TCB_ALLOC_DYNAMIC)
+    // 静态分配: 重置状态.
+    __canTCB_release_Static(pDev);    // 注意. 该API为空逻辑，此处调用仅为了形式上统一.
+
+    Cus_CAN_Priv_t *pPriv = &s_CanDevicePriPool[index];
+    memset(pPriv, 0, sizeof(Cus_CAN_Priv_t));
+
+    Cus_CAN_Device_t *pDevbuffer = &s_CanDevicePool[index];
+    memset(pDevbuffer, 0, sizeof(Cus_CAN_Device_t));
+  #endif 
+
+  s_CanDeviceUsed[index] = 0;
+} 
 
 
 static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, uint32_t *prescaler, uint32_t *pbs1, uint32_t *pbs2)
@@ -999,21 +1224,30 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
 
   if ( ((Cus_CAN_Priv_t *)pDev->private)->RxBuffer == NULL || ((Cus_CAN_Priv_t *)pDev->private)->pRing == NULL )  // 用户未注册缓冲区.
   {
-    return;   // 缓冲区未注册. 直接返回.
+    Cus_CAN_RxMsg_t dummy_msg;
+    HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &dummy_msg.RxHeader, dummy_msg.RxData);
+
+    return;   // 缓冲区未注册. 读取FIFO清中断后直接返回.
   }
 
   Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
   uint16_t next_head = ( pPrivate->head + 1 ) % pPrivate->max_msgNum; // 计算下一个写入位置.
   if ( next_head == pPrivate->tail )
   {
-    // 缓冲区写满. 数据丢失.
-    // 读取一次FIFO. 清除中断.
-    Cus_CAN_RxMsg_t dummy_msg;
-    HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &dummy_msg.RxHeader, dummy_msg.RxData);
+    #if (!USE_DEFAULT_RxFIFO_FULL_HOOK)
+      // 缓冲区写满. 数据丢失.
+      // 读取一次FIFO. 清除中断.
+      Cus_CAN_RxMsg_t dummy_msg;
+      HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &dummy_msg.RxHeader, dummy_msg.RxData);
+      Cus_CANRecvITFull_Hook( pDev );
+      return;
+    #endif 
 
-    // 自定义处理机制.
-    Cus_CANRecvITFull_Hook( pDev );
-    return;
+    #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+      // 自定义处理机制.
+      Cus_CANRecvITFull_Hook( pDev );
+      next_head = ( pPrivate->head + 1 ) % pPrivate->max_msgNum;;    // Default Hook 内部由于重置了状态. 所以此处重新计算next_head. 确保下次写入逻辑偏移正确.
+    #endif 
   }
 
   Cus_CAN_RxMsg_t *Msg = &pPrivate->pRing[pPrivate->head];
@@ -1035,15 +1269,23 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
 {
   if ( !instance || !g_gpio )   return HAL_ERROR;
 
-  CAN_HandleTypeDef *hcan = Cus_CAN_getHandle(instance);
-  CANInitConfig_t *pInit;
-  if ( Factory_CANInitConfig_t(&pInit) != 0 )   return HAL_ERROR;
+  #if (CAN_CFG_ALLOC_DYNAMIC)
+    CANInitConfig_t *pInit;
+    if ( Factory_CANInitConfig_t(&pInit) != 0 )   return HAL_ERROR;
+  #elif (!CAN_CFG_ALLOC_DYNAMIC)
+    uint8_t canInitBuf[sizeof(CANInitConfig_t) + 2];    // +2的冗余空间.
+
+    int8_t ret = Factory_CANInitConfig_t_Static(canInitBuf, sizeof(canInitBuf));
+    if ( ret )    return HAL_ERROR;
+
+    CANInitConfig_t *pInit = (CANInitConfig_t *)canInitBuf;
+  #endif  // CAN_CFG_ALLOC_DYNAMIC
 
   pInit->baudrate = CAN_BAUDRATE_500K;
   pInit->Instance = instance;
-  pInit->Mode = MODE_NORMAL;
+  pInit->Mode = MODE_LOOPBACK;
   pInit->is_AutoBusOff = false;
-  pInit->is_AutoRestransmission = false;
+  pInit->is_AutoRestransmission = true;
   pInit->is_AutoWakeUP = false;
   pInit->is_ReceiveFifoLocked = false;
   pInit->is_TimeTriggeredMode = false;
@@ -1069,11 +1311,20 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_Filter_QuickConfig( CAN_TypeD
 {
   if ( !instance )    return HAL_ERROR;
 
-  CAN_HandleTypeDef *hcan = Cus_CAN_getHandle(instance);
+  CAN_HandleTypeDef *hcan = Cus_CAN_getHandle(instance);    // 此处获取Handle只为检查Instance所对应的CAN Handle是否已正确通过CUS库进行维护和初始化.
   if ( hcan == NULL )   return HAL_ERROR;
 
-  CANFilterConfig_t *pFilter;
-  if ( Factory_CANFilterConfig_t(&pFilter) != 0 )   return HAL_ERROR;
+  #if (CAN_CFG_ALLOC_DYNAMIC)
+    CANFilterConfig_t *pFilter;
+    if ( Factory_CANFilterConfig_t(&pFilter) != 0 )   return HAL_ERROR;
+  #elif (!CAN_CFG_ALLOC_DYNAMIC)
+    uint8_t canFilterBuf[sizeof(CANFilterConfig_t) + 2];
+
+    int ret = Factory_CANFilterConfig_t_Static(canFilterBuf, sizeof(canFilterBuf));
+    if ( ret )    return HAL_ERROR;
+
+    CANFilterConfig_t *pFilter = (CANFilterConfig_t *)canFilterBuf;
+  #endif // CAN_CFG_ALLOC_DYNAMIC
 
   pFilter->FIFOAssignment = Cus_CAN_FIFOASSIGNMENT_FIFO0;
   pFilter->FilterBank = 0;
@@ -1197,6 +1448,172 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
 
 
 /* ------------------------------------------------------------------------- */
+
+
+/* ----------------------------- Send_ASYNC --------------------------------- */
+#if (USE_SEND_ASYNC)
+  static void Cus_CAN_NodePollInit( Cus_CAN_Device_t *pDev )
+  {
+    if ( !pDev || !pDev->Instance )   return;
+
+    Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
+    pPriv->TxBusy = 1;      pPriv->TxHead = NULL;
+    pPriv->TxTail = NULL;   pPriv->TxCurrent = NULL;
+
+    // 由于内存池由所有CAN实例共享，所以无论哪个实例初始化时都会初始化全局内存池（只一次）.
+    if ( !is_NodePollInit )        
+    {
+      TxFreeStackIndex = 0;
+      FreeStackCount = TX_NODE_POLL_SIZE;
+      is_NodePollInit = true;
+    }
+
+    for( uint8_t i = 0; i < TX_NODE_POLL_SIZE; i++ )
+    {
+      s_TxNodePoll[i].next = NULL;
+      s_TxNodePoll[i].canIndex = CAN_FREE;
+      memset(s_TxNodePoll[i].data, 0, sizeof(s_TxNodePoll[i].data));
+      memset(&s_TxNodePoll[i].TxHeader, 0, sizeof(CAN_TxHeaderTypeDef));
+
+      s_TxNodeFreeStack[TxFreeStackIndex++] = &s_TxNodePoll[i];     // 将节点池中节点依次压栈空闲指针栈(初始时，所有节点空闲).
+    }
+  }
+
+
+  static TxMsgNode_t *Cus_CAN_NodeAlloc( Cus_CAN_Device_t *pDev )
+  {
+    if ( !pDev || !pDev->Instance )   return NULL;
+
+    Cus_CAN_Priv_t *pPri = (Cus_CAN_Priv_t *)pDev->private;
+
+    // 先检查空闲栈是否仍可用.
+    if ( FreeStackCount == 0 )
+    {
+      // 节点池已全部被分配,无空余空间. 返回空指针由上层进行处理.
+      return NULL;
+    }
+
+__disable_irq();
+    // 获取新节点.
+    TxMsgNode_t *pNode = s_TxNodeFreeStack[--TxFreeStackIndex];   // 这里一定要是前置自减！
+    pNode->canIndex = Cus_CAN_getIndex(pDev->Instance);
+    FreeStackCount--;
+__enable_irq();
+
+    return pNode;
+  }
+
+
+  static void Cus_CAN_FreeNode( TxMsgNode_t *pNode )
+  {
+    if ( !pNode )   return;
+
+    pNode->canIndex = CAN_FREE;
+    pNode->next = NULL;
+
+    // 清除残留数据.
+    memset(pNode->data, 0, sizeof(pNode->data));
+    memset(&pNode->TxHeader, 0, sizeof(CAN_TxHeaderTypeDef));
+
+    // 重新放回空闲指针栈.(此处操作全局数据无需额外显示临界保护. 因为上层调用已经确保处于临界状态)
+    s_TxNodeFreeStack[TxFreeStackIndex++] = pNode;
+    FreeStackCount++;
+  }
+
+
+  static HAL_StatusTypeDef Cus_CAN_Send_IT( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf )
+  {
+    if ( !pDev || !pDev->Instance || !Send_Buf )    return HAL_ERROR;
+
+    Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
+
+    TxMsgNode_t *Send_Node = Cus_CAN_NodeAlloc(pDev);
+    if ( !Send_Node )   return HAL_BUSY;    // 分配失败. 无多余空闲节点. 返回BUSY供上层检查处理.
+
+    // 填充 Node 的必须字段.
+    memcpy(Send_Node->data, Send_Buf, sizeof(Send_Node->data));
+    Send_Node->TxHeader = Txheader;
+
+__disable_irq();
+    // 判断当前节点是否是队列第一个元素.
+    if ( pPriv->TxHead == NULL && pPriv->TxTail == NULL )
+    {
+      // 对于队列中第一个成员. Head Tail 都是它自身.
+      pPriv->TxHead = Send_Node;
+      pPriv->TxTail = Send_Node;
+    }
+    else 
+    {
+      // 将当前发送节点挂载到发送队列末尾.
+      pPriv->TxTail->next = Send_Node;
+
+      // 更新队列末尾成员.
+      pPriv->TxTail = Send_Node;
+    }
+__enable_irq();
+
+    // 从队列头取节点,启动一次发送. (使用邮箱0)
+    if ( pPriv->TxBusy )
+    {
+      // 取出队列头作为要发送的节点.
+      pPriv->TxCurrent = pPriv->TxHead;
+
+      // 更新头部节点.
+      pPriv->TxHead = pPriv->TxHead->next;
+
+      if ( pPriv->TxHead == NULL )  pPriv->TxTail = NULL;
+
+	  uint32_t TxMailbox;
+      HAL_StatusTypeDef hReturn = HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
+      if ( hReturn != HAL_OK )
+      {
+        // 请求失败处理.(待实现)
+        return HAL_ERROR;
+      }
+      pPriv->TxBusy = 0;
+    }
+
+    return HAL_OK;
+  }
+
+
+  void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev )
+  {
+    if ( !pDev || !pDev->Instance )   return;
+
+    Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
+
+__disable_irq();
+    if ( pPriv->TxHead )
+    {
+      // 将当前已发送完成的节点0初始化后重新放回空闲指针栈.
+      Cus_CAN_FreeNode(pPriv->TxCurrent);   
+
+      // 更新当前的 Current. 取出头节点准备启动下一次发送.
+      pPriv->TxCurrent = pPriv->TxHead;
+
+      // 更新Head指向下一个待发送节点.
+      pPriv->TxHead = pPriv->TxHead->next;
+
+      if ( !pPriv->TxHead )    pPriv->TxTail = NULL;   // 发送队列空.
+
+	  uint32_t TxMailbox;
+      HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
+__enable_irq();
+      return;
+
+    }
+
+    // 释放最后一个节点.
+    Cus_CAN_FreeNode(pPriv->TxCurrent);
+    pPriv->TxCurrent = NULL;  
+
+    // 整个队列发送完毕.才置空闲标志位.
+    pPriv->TxBusy = 1;    
+__enable_irq();
+  }
+#endif // USE_SEND_ASYNC
+/* -------------------------------------------------------------------------- */
 
 
 

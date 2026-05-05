@@ -24,16 +24,21 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* 默认不包含配套的CANTP. */
 // #include "Cus_CANTP.h"
 
 
 /* *************** Feature ****************** */
-  #define USE_DEFAULT_RxFIFO_FULL_HOOK  (1)
+  #define USE_DEFAULT_RxFIFO_FULL_HOOK    (1)
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       #define MAX_FIFO_FULL_COUNT  (5)
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
+
+  #define CAN_CFG_ALLOC_DYNAMIC           (0)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
+  #define CAN_TCB_ALLOC_DYNAMIC           (0)     // 设备结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
+  #define USE_SEND_ASYNC                  (1)     // 是否启用异步发送: 0=不启用异步发送(发送为阻塞式). 1=启用异步发送(添加异步发送API).
+    #if (USE_SEND_ASYNC)
+      #define SEND_ASYNC_NodePOLL_DYNAMIC (0)     // 发送队列节点池内存分配方式: 0=静态分配(默认). 1=动态分配.
+    #endif // USE_SEND_ASYNC
 
 
 /* ******************************************* */
@@ -55,10 +60,30 @@
   #define CAN_FILTER_MASK_DATA           (0xAA)
   #define CAN_FILTER_MASK_REMOTE         (0xBB)
 
+  #if (USE_SEND_ASYNC) && (!SEND_ASYNC_NodePOLL_DYNAMIC)
+    #define TX_NODE_POLL_SIZE            (8)        // 队列节点池内存预分配大小(单位: sizeof(TxMsgNode_t)). 仅用于静态内存分配时.
+  #endif 
+
+  #if (USE_SEND_ASYNC)
+    #define CAN_FREE                     (-1)       // 标志该节点目前未绑定实例. 处于空闲状态.
+  #endif 
 /* ***************************************** */
 
 
 /* ******************************************* */
+
+#if (USE_SEND_ASYNC)
+  typedef struct TxMsgNode              // 发送队列消息节点(链表).
+  {
+    CAN_TxHeaderTypeDef TxHeader;
+    uint8_t data[8];
+    int8_t canIndex;                   // 记录当前正在发送的CAN实例.
+    struct TxMsgNode *next;
+
+  } TxMsgNode_t;
+#endif // USE_SEND_ASYNC
+
+
 typedef enum 
 {
   MODE_NORMAL,
@@ -187,6 +212,11 @@ struct Cus_CAN_Device
   CAN_TypeDef *Instance;
   CAN_HandleTypeDef *canHandle;
   HAL_StatusTypeDef (*Send)( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
+
+  #if (USE_SEND_ASYNC)
+    HAL_StatusTypeDef (*Send_IT)( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
+  #endif 
+
   HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
   HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf );
   HAL_StatusTypeDef (*EnableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
@@ -219,12 +249,24 @@ typedef struct
 
 
 /* ----------------------------------------------------------------- */
-uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
-uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
+#if (CAN_CFG_ALLOC_DYNAMIC)
+  uint8_t Factory_CANInitConfig_t( CANInitConfig_t **pOutConfig );
+  uint8_t Factory_CANFilterConfig_t( CANFilterConfig_t **pOutConfig );
+#elif (!CAN_CFG_ALLOC_DYNAMIC)
+  int8_t Factory_CANInitConfig_t_Static( uint8_t *buffer, uint32_t buffer_size );
+  int8_t Factory_CANFilterConfig_t_Static( uint8_t *buffer, uint32_t buffer_size );
+#endif // CAN_CFG_ALLOC_DYNAMIC
+
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
+void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+
+#if (USE_SEND_ASYNC)
+  void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
+#endif // USE_SEND_ASYNC
 /* ----------------------------------------------------------------- */
 
 
