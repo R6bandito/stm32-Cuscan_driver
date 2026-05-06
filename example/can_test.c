@@ -507,5 +507,70 @@ BasicTestResult_t BasicTest_InterruptReceive( void )
     printf("======== BasicTest_AsyncSend_SingleFrame Test PASS! =========\n\n");
     return TEST_PASS;
   }
+
+
+  BasicTestResult_t BasicTest_AsyncSend_HighFreq( void )
+  {
+    printf("\n======== BasicTest_AsyncSend_HighFreq Test Start ========\n");
+    if ( TestEnv_Init() != TEST_PASS )    return TEST_FAIL;
+
+    Cus_CAN_Device_t *pDev = Cus_CAN_getControlBlock(CAN1);
+
+    // 配置接收缓冲区.
+    static Cus_CAN_RxMsg_t rxBuf[64];
+    BASIC_ASSERT(pDev->registerRxBuffer(pDev, rxBuf, sizeof(rxBuf)) == 0);
+
+    // 使能中断.
+    BASIC_ASSERT(pDev->EnableInterrupt(pDev, CAN_IT_RX_FIFO0_MSG_PENDING) == HAL_OK);
+    BASIC_ASSERT(pDev->EnableInterrupt(pDev, CAN_IT_TX_MAILBOX_EMPTY) == HAL_OK);
+
+    CAN_TxHeaderTypeDef header = { .StdId = 0x200, .DLC = 1, .IDE = CAN_ID_STD, .RTR = CAN_RTR_DATA };
+
+    uint8_t data[8] = {0};
+    int fail_count = 0;
+
+    // 连续发送 50 帧，间隔 1ms，确保队列能正常消化.
+    for (int i = 0; i < 50; i++) 
+    {
+      data[0] = i;
+      HAL_StatusTypeDef ret = pDev->Send_IT(pDev, header, data);
+      if ( ret != HAL_OK ) 
+      {
+        fail_count++;
+      }
+
+      HAL_Delay(1);
+    }
+
+    printf("  Fail count: %d (should be 0)\r\n", fail_count);
+
+    // 将50帧数据全部接收.
+    CAN_RxHeaderTypeDef rxheader;
+    uint8_t rxdata[8];
+
+    for( uint8_t i = 0; i < 50; i++ )
+    {
+      BASIC_ASSERT(pDev->Receive_IT(pDev, &rxheader, rxdata) == HAL_OK);
+
+      printf("  StdId=%X\tDLC=%d\t", rxheader.StdId, rxheader.DLC);
+      for( uint8_t i = 0; i < rxheader.DLC; i++ )
+      {
+        printf("Data=%X ", rxdata[i]);
+        if ( i == rxheader.DLC - 1 )
+        {
+          printf("\n");
+        }
+      }
+
+      HAL_Delay(1);
+    }
+
+    BASIC_ASSERT(fail_count == 0);
+
+    // 再次获取应该失败.
+    BASIC_ASSERT(pDev->Receive_IT(pDev, &rxheader, rxdata) == HAL_ERROR);
+
+    printf("======== BasicTest_AsyncSend_HighFreq Test PASS! =========\n\n");
+  }
 #endif 
 /* ----------------------------------------------------------------------------- */

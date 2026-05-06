@@ -30,6 +30,7 @@ BasicTestResult_t BasicTest_InterruptReceive( void );               // 中断接
 
 #if (USE_SEND_ASYNC)
   BasicTestResult_t BasicTest_AsyncSend_SingleFrame( void );          // 异步发送单帧.
+  BasicTestResult_t BasicTest_AsyncSend_HighFreq( void );            // 异步高频发送测试.
 #endif 
 
 #if (CAN_CFG_ALLOC_DYNAMIC) 

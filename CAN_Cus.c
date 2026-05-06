@@ -6,7 +6,6 @@ static CAN_HandleTypeDef canHandle[MAX_SUPPORT_CANDEV] = { 0 };
 static Cus_CAN_Device_t *CanDevice[MAX_SUPPORT_CANDEV];
 static uint8_t s_CanDeviceUsed[MAX_SUPPORT_CANDEV];
 
-
 #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
   void *g_pBackUP_Array[MAX_FIFO_FULL_COUNT];
 #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
@@ -19,7 +18,6 @@ static uint8_t s_CanDeviceUsed[MAX_SUPPORT_CANDEV];
   uint8_t FreeStackCount;       // 剩余空闲节点数目.
   bool is_NodePollInit = false;
 #endif // USE_SEND_ASYNC
-
 
 
 // Device结构 私有变量.用户不允许直接访问.
@@ -1563,7 +1561,7 @@ __enable_irq();
 
       if ( pPriv->TxHead == NULL )  pPriv->TxTail = NULL;
 
-	  uint32_t TxMailbox;
+      uint32_t TxMailbox;
       HAL_StatusTypeDef hReturn = HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
       if ( hReturn != HAL_OK )
       {
@@ -1597,7 +1595,7 @@ __disable_irq();
 
       if ( !pPriv->TxHead )    pPriv->TxTail = NULL;   // 发送队列空.
 
-	  uint32_t TxMailbox;
+      uint32_t TxMailbox;
       HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
 __enable_irq();
       return;

@@ -180,6 +180,14 @@ void HAL_CAN_TxMailbox1CompleteCallback( CAN_HandleTypeDef *hcan )
       #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
         Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 2);
       #endif
+
+      #if (USE_SEND_ASYNC)
+        Cus_CAN_Device_t *pDev = Cus_CAN_getControlBlock(hcan->Instance);
+        if ( pDev )
+        {
+          Cus_CAN_ProcessTxQueue(pDev);
+        }
+      #endif 
     }
     // Your Code Here.
     {
@@ -197,6 +205,14 @@ void HAL_CAN_TxMailbox2CompleteCallback( CAN_HandleTypeDef *hcan )
       #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
         Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 4);
       #endif
+
+      #if (USE_SEND_ASYNC)
+        Cus_CAN_Device_t *pDev = Cus_CAN_getControlBlock(hcan->Instance);
+        if ( pDev )
+        {
+          Cus_CAN_ProcessTxQueue(pDev);
+        }
+      #endif 
     }
     // Your Code Here.
     {
