@@ -1548,7 +1548,6 @@ __disable_irq();
       // 更新队列末尾成员.
       pPriv->TxTail = Send_Node;
     }
-__enable_irq();
 
     // 从队列头取节点,启动一次发送. (使用邮箱0)
     if ( pPriv->TxBusy )
@@ -1560,6 +1559,7 @@ __enable_irq();
       pPriv->TxHead = pPriv->TxHead->next;
 
       if ( pPriv->TxHead == NULL )  pPriv->TxTail = NULL;
+__enable_irq();
 
       uint32_t TxMailbox;
       HAL_StatusTypeDef hReturn = HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
