@@ -1281,7 +1281,7 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
 
   pInit->baudrate = CAN_BAUDRATE_500K;
   pInit->Instance = instance;
-  pInit->Mode = MODE_LOOPBACK;
+  pInit->Mode = MODE_NORMAL;
   pInit->is_AutoBusOff = false;
   pInit->is_AutoRestransmission = true;
   pInit->is_AutoWakeUP = false;
