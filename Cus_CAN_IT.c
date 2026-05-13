@@ -18,7 +18,7 @@
 
 /* ------------------------------------------------------------------- */
 extern void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
-extern void Cus_CAN_FeedCanTP(Cus_CAN_Device_t *pDev);
+extern void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
 /* ------------------------------------------------------------------- */
 
 
@@ -153,7 +153,7 @@ void HAL_CAN_TxMailbox0CompleteCallback( CAN_HandleTypeDef *hcan )
   {
     {
       #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
-        Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 1);
+        Cus_Cantp_TxConfirmation((void *)hcan->Instance, 1);
       #endif
 
       #if (USE_SEND_ASYNC)
@@ -178,7 +178,7 @@ void HAL_CAN_TxMailbox1CompleteCallback( CAN_HandleTypeDef *hcan )
   {
     {
       #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
-        Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 2);
+        Cus_Cantp_TxConfirmation((void *)hcan->Instance, 2);
       #endif
 
       #if (USE_SEND_ASYNC)
@@ -203,7 +203,7 @@ void HAL_CAN_TxMailbox2CompleteCallback( CAN_HandleTypeDef *hcan )
   {
     {
       #ifdef __Cus_CANTP_XzzwY7a9BBCTQ7__
-        Cus_Cantp_TxConfirmation((U8 *)hcan->Instance, 4);
+        Cus_Cantp_TxConfirmation((void *)hcan->Instance, 4);
       #endif
 
       #if (USE_SEND_ASYNC)
@@ -339,6 +339,14 @@ __weak void Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev )
 __weak void Cus_CANRecvITFailed_Hook ( Cus_CAN_Device_t *pDev )
 {
   UNUSED(pDev);
+}
+
+
+__weak void Cus_CAN_OnDisableRxIT_NonEmpty( Cus_CAN_Device_t *pDev, uint16_t pendingCount, uint32_t interrupt_mask )
+{
+  UNUSED(pDev);
+  UNUSED(pendingCount);
+  UNUSED(interrupt_mask);
 }
 
 

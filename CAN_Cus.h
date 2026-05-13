@@ -24,7 +24,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-// #include "Cus_CANTP.h"
+#include "Cus_CANTP.h"
 
 
 /* *************** Feature ****************** */
@@ -220,6 +220,7 @@ struct Cus_CAN_Device
   HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
   HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf );
   HAL_StatusTypeDef (*EnableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
+  HAL_StatusTypeDef (*DisableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
   bool (*CheckInterrupt)( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
   uint8_t (*registerRxBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
 
@@ -261,12 +262,9 @@ CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
+int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev );
 void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
-
-#if (USE_SEND_ASYNC)
-  void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
-#endif // USE_SEND_ASYNC
 /* ----------------------------------------------------------------- */
 
 
@@ -367,6 +365,7 @@ void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef hal_sta
 void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status );
 void Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev );
 void Cus_CANRecvITFailed_Hook ( Cus_CAN_Device_t *pDev );
+void Cus_CAN_OnDisableRxIT_NonEmpty( Cus_CAN_Device_t *pDev, uint16_t pendingCount, uint32_t interrupt_mask );
 
 void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev );
 

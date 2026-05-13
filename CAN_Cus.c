@@ -67,6 +67,7 @@ int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev );
 
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
@@ -84,6 +85,7 @@ static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeD
 static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
 static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf );
 static HAL_StatusTypeDef Cus_CAN_EnbIT( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
+static HAL_StatusTypeDef Cus_CAN_DisableIT( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
 static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t *pConf_Structure );
 static bool CheckInterrupt( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
 static uint8_t createCANTCB( Cus_CAN_Device_t **pDevice, const CANInitConfig_t *pInit );
@@ -343,6 +345,7 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
 
     pTCB->Receive = Cus_CAN_Recv;
     pTCB->EnableInterrupt = Cus_CAN_EnbIT;
+    pTCB->DisableInterrupt = Cus_CAN_DisableIT;
     pTCB->CheckInterrupt = CheckInterrupt;
     pTCB->registerRxBuffer = Cus_CAN_registerRXBuffer;
     pTCB->private = (void *)pPriv;
@@ -391,6 +394,21 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
     if ( !s_CanDeviceUsed[index] )    return NULL;    // 检查静态内存池对应的index是否已被CUS库正确初始化.
 
     return CanDevice[index];
+  }
+
+
+  int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev )
+  {
+    if ( !pDev || !pDev->Instance || !pDev->canHandle )   return -1;
+
+    Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
+    if ( !pPriv->RxBuffer || !pPriv->pRing )    return -2;
+
+    uint16_t head = pPriv->head;
+    uint16_t tail = pPriv->tail;
+    uint16_t max_num = pPriv->max_msgNum;
+
+    return (head - tail) % max_num;
   }
 /* --------------------------------------------------------------------------------------------------- */
 
@@ -664,9 +682,49 @@ static HAL_StatusTypeDef Cus_CAN_EnbIT( Cus_CAN_Device_t *pDev, uint32_t interru
   if ( hReturn != HAL_OK )    return HAL_ERROR;
 
   if ( !pDev->CheckInterrupt(pDev, interrupt_mask) )   return HAL_ERROR;                // 额外检查. 
+
   Cus_CAN_NVIC_Config(pDev);                                                            // 更新NVIC配置.
 
+#if (USE_SEND_ASYNC)
+  if ( interrupt_mask & CAN_IT_TX_MAILBOX_EMPTY )
+  {
+    /* 若重新开启的中断为 CAN_IT_TX_MAILBOX_EMPTY. 且开启了异步发送功能. 则检查发送队列是否有待发数据 */
+    Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
+    if ( !pPriv->TxBusy && (pPriv->TxHead != NULL || pPriv->TxCurrent != NULL) )
+    {
+      /* 关中断时，发送队列出现被卡阻状态，恢复中断后，手动调用一次 Cus_CAN_ProcessTxQueue 推动队列发送状态机 */
+      Cus_CAN_ProcessTxQueue(pDev);
+    }
+  }
+#endif 
+
   return HAL_OK;
+}
+
+
+static HAL_StatusTypeDef Cus_CAN_DisableIT( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask )
+{
+  if ( !pDev || !pDev->canHandle || !pDev->Instance )   return HAL_ERROR;
+
+  /* 目标中断未使能 或 已经被关闭. 空调用 */
+  if ( !pDev->CheckInterrupt(pDev ,interrupt_mask) )    return HAL_OK;
+
+  HAL_StatusTypeDef hReturn = HAL_CAN_DeactivateNotification(pDev->canHandle, interrupt_mask);
+  if ( hReturn != HAL_OK )    return HAL_ERROR;
+
+  /* 立即读取对应位，检查中断是否已按预期关闭. */
+  if ( !pDev->CheckInterrupt(pDev, interrupt_mask) )
+  {
+    if ( interrupt_mask == CAN_IT_RX_FIFO0_MSG_PENDING || interrupt_mask == CAN_IT_RX_FIFO1_MSG_PENDING )
+    {
+      /* 关闭 FIFOx 挂起中断时，接收缓冲区仍有数据. 调用Hook回调通知用户是否进行处理. */
+      Cus_CAN_OnDisableRxIT_NonEmpty(pDev, Cus_CAN_GetRxBufferPendingCount(pDev), interrupt_mask);
+    }
+
+    return HAL_OK;
+  }
+
+  return HAL_ERROR;
 }
 
 
@@ -878,6 +936,12 @@ HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance )
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf )
 {
   if ( !pDev || !Send_Buf || !pDev->canHandle || !pDev->Instance )    return HAL_ERROR;
+
+  if ( pDev->CheckInterrupt(pDev, CAN_IT_TX_MAILBOX_EMPTY) )
+  {
+    /* 使用阻塞发送的前提是 不能使能 Tx 发送完成中断. 使能Tx发送完成中断的前提下调用该API将默认返回错误. 注意 */
+    return HAL_ERROR;
+  }
 
   if ( Txheader.DLC > 8 )   Txheader.DLC = 8;       // 长度限制为8.
 
@@ -1283,7 +1347,7 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
   pInit->Instance = instance;
   pInit->Mode = MODE_NORMAL;
   pInit->is_AutoBusOff = false;
-  pInit->is_AutoRestransmission = true;
+  pInit->is_AutoRestransmission = false;
   pInit->is_AutoWakeUP = false;
   pInit->is_ReceiveFifoLocked = false;
   pInit->is_TimeTriggeredMode = false;
@@ -1581,6 +1645,7 @@ __enable_irq();
 
     Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
 
+uint32_t primask = __get_PRIMASK();
 __disable_irq();
     if ( pPriv->TxHead )
     {
@@ -1597,7 +1662,7 @@ __disable_irq();
 
       uint32_t TxMailbox;
       HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
-__enable_irq();
+__set_PRIMASK(primask);
       return;
 
     }
@@ -1608,7 +1673,7 @@ __enable_irq();
 
     // 整个队列发送完毕.才置空闲标志位.
     pPriv->TxBusy = 1;    
-__enable_irq();
+__set_PRIMASK(primask);
   }
 #endif // USE_SEND_ASYNC
 /* -------------------------------------------------------------------------- */
