@@ -746,7 +746,7 @@ static bool CheckInterrupt( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mas
   if ( !pDev || !pDev->canHandle )  return false;
 
   uint32_t check_IT = ((pDev->Instance->IER) & interrupt_mask);
-  if ( check_IT == interrupt_mask )   return true;
+  if ( check_IT )   return true;
   else return false;
 }
 
@@ -1336,6 +1336,7 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
     if ( Factory_CANInitConfig_t(&pInit) != 0 )   return HAL_ERROR;
   #elif (!CAN_CFG_ALLOC_DYNAMIC)
     uint8_t canInitBuf[sizeof(CANInitConfig_t) + 2];    // +2的冗余空间.
+    memset(canInitBuf, 0, sizeof(canInitBuf));
 
     int8_t ret = Factory_CANInitConfig_t_Static(canInitBuf, sizeof(canInitBuf));
     if ( ret )    return HAL_ERROR;
@@ -1345,7 +1346,7 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
 
   pInit->baudrate = CAN_BAUDRATE_500K;
   pInit->Instance = instance;
-  pInit->Mode = MODE_NORMAL;
+  pInit->Mode = MODE_LOOPBACK;
   pInit->is_AutoBusOff = false;
   pInit->is_AutoRestransmission = false;
   pInit->is_AutoWakeUP = false;
@@ -1381,6 +1382,7 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_Filter_QuickConfig( CAN_TypeD
     if ( Factory_CANFilterConfig_t(&pFilter) != 0 )   return HAL_ERROR;
   #elif (!CAN_CFG_ALLOC_DYNAMIC)
     uint8_t canFilterBuf[sizeof(CANFilterConfig_t) + 2];
+    memset(canFilterBuf, 0, sizeof(canFilterBuf));
 
     int ret = Factory_CANFilterConfig_t_Static(canFilterBuf, sizeof(canFilterBuf));
     if ( ret )    return HAL_ERROR;
@@ -1530,15 +1532,19 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
       is_NodePollInit = true;
     }
 
-    for( uint8_t i = 0; i < TX_NODE_POLL_SIZE; i++ )
+    if ( !is_NodePollInit )
     {
-      s_TxNodePoll[i].next = NULL;
-      s_TxNodePoll[i].canIndex = CAN_FREE;
-      memset(s_TxNodePoll[i].data, 0, sizeof(s_TxNodePoll[i].data));
-      memset(&s_TxNodePoll[i].TxHeader, 0, sizeof(CAN_TxHeaderTypeDef));
-
-      s_TxNodeFreeStack[TxFreeStackIndex++] = &s_TxNodePoll[i];     // 将节点池中节点依次压栈空闲指针栈(初始时，所有节点空闲).
+      for( uint8_t i = 0; i < TX_NODE_POLL_SIZE; i++ )
+      {
+        s_TxNodePoll[i].next = NULL;
+        s_TxNodePoll[i].canIndex = CAN_FREE;
+        memset(s_TxNodePoll[i].data, 0, sizeof(s_TxNodePoll[i].data));
+        memset(&s_TxNodePoll[i].TxHeader, 0, sizeof(CAN_TxHeaderTypeDef));
+  
+        s_TxNodeFreeStack[TxFreeStackIndex++] = &s_TxNodePoll[i];     // 将节点池中节点依次压栈空闲指针栈(初始时，所有节点空闲).
+      }
     }
+
   }
 
 
