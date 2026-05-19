@@ -23,16 +23,16 @@ static uint8_t s_CanDeviceUsed[MAX_SUPPORT_CANDEV];
 // Device结构 私有变量.用户不允许直接访问.
 typedef struct Cus_Private
 {
-  // 用户注册的缓冲区信息.
-  void *RxBuffer;
-  uint32_t buffer_Size; 
+  // 用户注册的缓冲区信息.为每个 FIFO 分别管理的环形缓冲区.
+  void *RxBuffer[MAX_SUPPORT_RXFIFO];
+  uint32_t buffer_Size[MAX_SUPPORT_RXFIFO]; 
 
   // 环形缓冲区管理变量（由驱动内部使用）.
-  volatile uint16_t head;
-  volatile uint16_t tail;
-  uint16_t max_msgNum;
+  volatile uint16_t head[MAX_SUPPORT_RXFIFO];
+  volatile uint16_t tail[MAX_SUPPORT_RXFIFO];
+  uint16_t max_msgNum[MAX_SUPPORT_RXFIFO];
 
-  Cus_CAN_RxMsg_t *pRing;        // 将 pBuffer 强制转换为 Cus_CAN_RxMsg_t* 后的指针
+  Cus_CAN_RxMsg_t *pRing[MAX_SUPPORT_RXFIFO];        // 将 pBuffer 强制转换为 Cus_CAN_RxMsg_t* 后的指针
 
   #if (USE_SEND_ASYNC)
     TxMsgNode_t *TxHead;         // 发送队列头. 
@@ -67,7 +67,7 @@ int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
-int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev );
+int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx );
 
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
@@ -80,10 +80,10 @@ void Cus_CAN_Filter_SetStdMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MAS
 void Cus_CAN_Filter_SetExtMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint32_t id1, uint32_t id1_mask );
 void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask );
 
-static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
+static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size, uint8_t FIFO_idx );
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
 static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
-static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf );
+static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_Idx );
 static HAL_StatusTypeDef Cus_CAN_EnbIT( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
 static HAL_StatusTypeDef Cus_CAN_DisableIT( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
 static HAL_StatusTypeDef cus_canInit( const CANInitConfig_t *pConf_Structure );
@@ -265,12 +265,15 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
     Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)malloc(sizeof(Cus_CAN_Priv_t));
     if ( pPrivate == NULL )   return 0xFF;
     
-    pPrivate->RxBuffer = NULL;
-    pPrivate->head = 0;
-    pPrivate->tail = 0;
-    pPrivate->max_msgNum = 0;
-    pPrivate->buffer_Size = 0;
-    pPrivate->pRing = NULL;
+    for( uint8_t i = 0; i < MAX_SUPPORT_RXFIFO; i++ )
+    {
+      pPrivate->RxBuffer[i] = NULL;
+      pPrivate->head[i] = 0;
+      pPrivate->tail[i] = 0;
+      pPrivate->max_msgNum[i] = 0;
+      pPrivate->pRing[i] = NULL;
+      pPrivate->buffer_Size[i] = 0;
+    }
 
     memset(*pDevice, 0, sizeof(Cus_CAN_Device_t));
     (*pDevice)->Instance = pInit->Instance;
@@ -282,6 +285,11 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
     (*pDevice)->registerRxBuffer = Cus_CAN_registerRXBuffer;
     (*pDevice)->private = (void *)pPrivate;
     (*pDevice)->Receive_IT = Cus_CAN_Recv_IT;
+    (*pDevice)->DisableInterrupt = Cus_CAN_DisableIT;
+
+    #if (USE_SEND_ASYNC)
+      (*pDevice)->Send_IT = Cus_CAN_Send_IT;
+    #endif 
 
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       (*pDevice)->is_RingFIFO_Full = false;
@@ -290,6 +298,10 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
     s_CanDeviceUsed[index] = 1;
+
+    #if (USE_SEND_ASYNC)
+      Cus_CAN_NodePollInit(*pDevice);     // 若开启异步发送. 则于此处进行初始化.
+    #endif 
 
     // 控制TCB不允许人为清理. 不注册清理函数.
     return 0;
@@ -328,13 +340,16 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
     Cus_CAN_Device_t *pTCB = &s_CanDevicePool[index];
     Cus_CAN_Priv_t *pPriv = &s_CanDevicePriPool[index];
 
-    pPriv->RxBuffer = NULL;
-    pPriv->head = 0;
-    pPriv->tail = 0;
-    pPriv->max_msgNum = 0;
-    pPriv->pRing = NULL;
-    pPriv->buffer_Size = 0;
-
+    for( uint8_t i = 0; i < MAX_SUPPORT_RXFIFO; i++ )
+    {
+      pPriv->RxBuffer[i] = NULL;
+      pPriv->head[i] = 0;
+      pPriv->tail[i] = 0;
+      pPriv->max_msgNum[i] = 0;
+      pPriv->pRing[i] = NULL;
+      pPriv->buffer_Size[i] = 0;
+    }
+    
     pTCB->Instance = pInit->Instance;
     pTCB->canHandle = Cus_CAN_getHandle(pInit->Instance);
     pTCB->Send = Cus_CAN_Send;
@@ -397,16 +412,16 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
   }
 
 
-  int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev )
+  int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx )
   {
     if ( !pDev || !pDev->Instance || !pDev->canHandle )   return -1;
 
     Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
-    if ( !pPriv->RxBuffer || !pPriv->pRing )    return -2;
+    if ( !pPriv->RxBuffer[FIFO_idx] || !pPriv->pRing[FIFO_idx] )    return -2;
 
-    uint16_t head = pPriv->head;
-    uint16_t tail = pPriv->tail;
-    uint16_t max_num = pPriv->max_msgNum;
+    uint16_t head = pPriv->head[FIFO_idx];
+    uint16_t tail = pPriv->tail[FIFO_idx];
+    uint16_t max_num = pPriv->max_msgNum[FIFO_idx];
 
     return (head - tail) % max_num;
   }
@@ -715,10 +730,15 @@ static HAL_StatusTypeDef Cus_CAN_DisableIT( Cus_CAN_Device_t *pDev, uint32_t int
   /* 立即读取对应位，检查中断是否已按预期关闭. */
   if ( !pDev->CheckInterrupt(pDev, interrupt_mask) )
   {
-    if ( interrupt_mask == CAN_IT_RX_FIFO0_MSG_PENDING || interrupt_mask == CAN_IT_RX_FIFO1_MSG_PENDING )
+    if ( interrupt_mask == CAN_IT_RX_FIFO0_MSG_PENDING )
     {
       /* 关闭 FIFOx 挂起中断时，接收缓冲区仍有数据. 调用Hook回调通知用户是否进行处理. */
-      Cus_CAN_OnDisableRxIT_NonEmpty(pDev, Cus_CAN_GetRxBufferPendingCount(pDev), interrupt_mask);
+      Cus_CAN_OnDisableRxIT_NonEmpty(pDev, Cus_CAN_GetRxBufferPendingCount(pDev, FIFO_IDX_0), interrupt_mask);
+    }
+
+    if ( interrupt_mask == CAN_IT_RX_FIFO1_MSG_PENDING )
+    {
+      Cus_CAN_OnDisableRxIT_NonEmpty(pDev, Cus_CAN_GetRxBufferPendingCount(pDev, FIFO_IDX_1), interrupt_mask);
     }
 
     return HAL_OK;
@@ -984,14 +1004,14 @@ static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeade
 
   if ( RxFifo != CAN_RX_FIFO0 && RxFifo != CAN_RX_FIFO1 )   return HAL_ERROR;
 
-  bool is_RxITEnb = pDev->CheckInterrupt( pDev, CAN_IT_RX_FIFO0_MSG_PENDING );
+  bool is_RxITEnb = pDev->CheckInterrupt( pDev, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING );
   if ( is_RxITEnb )   return HAL_BUSY;    // 检查中断. 若接收中断开启，则不允许再调用该API.
 
   return HAL_CAN_GetRxMessage(pDev->canHandle, RxFifo, pHeader, Recv_Buf);
 }
 
 
-static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf )
+static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_idx )
 {
   if ( !pDev || !pDev->canHandle || !pHeader || !Recv_Buf )   return HAL_ERROR;
 
@@ -1005,21 +1025,21 @@ static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTy
   }
 
   Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
-  if ( !pPrivate->RxBuffer || !pPrivate->pRing )
+  if ( !pPrivate->RxBuffer[FIFO_idx] || !pPrivate->pRing[FIFO_idx] )
   {
     // 缓冲区未注册. 空调用.
     return HAL_ERROR;
   }
-  if ( pPrivate->head == pPrivate->tail )
+  if ( pPrivate->head[FIFO_idx] == pPrivate->tail[FIFO_idx] )
   {
     // 缓冲区为空. 无可接收数据.
     return HAL_ERROR;
   }
 
-  Cus_CAN_RxMsg_t *pMsg = &pPrivate->pRing[pPrivate->tail];
+  Cus_CAN_RxMsg_t *pMsg = &pPrivate->pRing[FIFO_idx][pPrivate->tail[FIFO_idx]];
   *pHeader = pMsg->RxHeader;
   memcpy(Recv_Buf, pMsg->RxData, pMsg->RxHeader.DLC);
-  pPrivate->tail = (pPrivate->tail + 1) % pPrivate->max_msgNum;
+  pPrivate->tail[FIFO_idx] = (pPrivate->tail[FIFO_idx] + 1) % pPrivate->max_msgNum[FIFO_idx];
 
   return HAL_OK;
 }
@@ -1242,7 +1262,7 @@ void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MAS
  * @warning 若同时使用 FIFO0 和 FIFO1 的中断，两者会共用同一缓冲区，
  *          消息将按到达顺序混合存储。若需区分来源，请自行设计。
  */
-static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size )
+static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size, uint8_t FIFO_idx )
 {
   if ( !pDev || !pDev->canHandle || !pBuffer || size == 0 || size > UINT32_MAX )  return 0xFF;
 
@@ -1251,13 +1271,13 @@ static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, 
 
   if ( size < sizeof(Cus_CAN_RxMsg_t) )   return 0xFF;  // 检查缓冲区大小是否至少能容纳一个消息.
 
-  pPri->buffer_Size = size;
-  pPri->max_msgNum = size / sizeof(Cus_CAN_RxMsg_t);
-  pPri->head = 0;
-  pPri->tail = 0;
-  pPri->pRing = (Cus_CAN_RxMsg_t *)pBuffer;
-  pPri->RxBuffer = pBuffer;
-  memset(pPri->RxBuffer, 0, size);
+  pPri->buffer_Size[FIFO_idx] = size;
+  pPri->max_msgNum[FIFO_idx] = size / sizeof(Cus_CAN_RxMsg_t);
+  pPri->head[FIFO_idx] = 0;
+  pPri->tail[FIFO_idx] = 0;
+  pPri->pRing[FIFO_idx] = (Cus_CAN_RxMsg_t *)pBuffer;
+  pPri->RxBuffer[FIFO_idx] = pBuffer;
+  memset(pPri->RxBuffer[FIFO_idx], 0, size);
 
   return 0;
 }
@@ -1292,9 +1312,11 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
     return;   // 缓冲区未注册. 读取FIFO清中断后直接返回.
   }
 
+  uint8_t FIFO_idx = (FIFO == CAN_RX_FIFO0 ? FIFO_IDX_0 : FIFO_IDX_1);
+
   Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
-  uint16_t next_head = ( pPrivate->head + 1 ) % pPrivate->max_msgNum; // 计算下一个写入位置.
-  if ( next_head == pPrivate->tail )
+  uint16_t next_head = ( pPrivate->head[FIFO_idx] + 1 ) % pPrivate->max_msgNum[FIFO_idx]; // 计算下一个写入位置.
+  if ( next_head == pPrivate->tail[FIFO_idx] )
   {
     #if (!USE_DEFAULT_RxFIFO_FULL_HOOK)
       // 缓冲区写满. 数据丢失.
@@ -1308,17 +1330,17 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       // 自定义处理机制.
       Cus_CANRecvITFull_Hook( pDev );
-      next_head = ( pPrivate->head + 1 ) % pPrivate->max_msgNum;;    // Default Hook 内部由于重置了状态. 所以此处重新计算next_head. 确保下次写入逻辑偏移正确.
+      next_head = ( pPrivate->head[FIFO_idx] + 1 ) % pPrivate->max_msgNum[FIFO_idx];    // Default Hook 内部由于重置了状态. 所以此处重新计算next_head. 确保下次写入逻辑偏移正确.
     #endif 
   }
 
-  Cus_CAN_RxMsg_t *Msg = &pPrivate->pRing[pPrivate->head];
+  Cus_CAN_RxMsg_t *Msg = &pPrivate->pRing[FIFO_idx][pPrivate->head[FIFO_idx]];
   if ( HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &Msg->RxHeader, Msg->RxData) != HAL_OK )
   {
     Cus_CANRecvITFailed_Hook(pDev);
     return;
   }
-  pPrivate->head = next_head;
+  pPrivate->head[FIFO_idx] = next_head;
 }
 
 
@@ -1561,14 +1583,15 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
 
     Cus_CAN_Priv_t *pPri = (Cus_CAN_Priv_t *)pDev->private;
 
+__disable_irq();
     // 先检查空闲栈是否仍可用.
     if ( FreeStackCount == 0 )
     {
       // 节点池已全部被分配,无空余空间. 返回空指针由上层进行处理.
+__enable_irq();
       return NULL;
     }
 
-__disable_irq();
     // 获取新节点.
     TxMsgNode_t *pNode = s_TxNodeFreeStack[--TxFreeStackIndex];   // 这里一定要是前置自减！
     pNode->canIndex = Cus_CAN_getIndex(pDev->Instance);
@@ -1636,17 +1659,18 @@ __disable_irq();
       pPriv->TxHead = pPriv->TxHead->next;
 
       if ( pPriv->TxHead == NULL )  pPriv->TxTail = NULL;
-__enable_irq();
 
       uint32_t TxMailbox;
       HAL_StatusTypeDef hReturn = HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
+
+      pPriv->TxBusy = 0;
       if ( hReturn != HAL_OK )
       {
         // 请求失败处理.(待实现)
         return HAL_ERROR;
       }
-      pPriv->TxBusy = 0;
     }
+__enable_irq();
 
     return HAL_OK;
   }

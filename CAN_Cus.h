@@ -33,8 +33,8 @@
       #define MAX_FIFO_FULL_COUNT  (5)
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
-  #define CAN_CFG_ALLOC_DYNAMIC           (0)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
-  #define CAN_TCB_ALLOC_DYNAMIC           (0)     // 设备结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
+  #define CAN_CFG_ALLOC_DYNAMIC           (1)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
+  #define CAN_TCB_ALLOC_DYNAMIC           (1)     // 设备结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
   #define USE_SEND_ASYNC                  (1)     // 是否启用异步发送: 0=不启用异步发送(发送为阻塞式). 1=启用异步发送(添加异步发送API).
     #if (USE_SEND_ASYNC)
       #define SEND_ASYNC_NodePOLL_DYNAMIC (0)     // 发送队列节点池内存分配方式: 0=静态分配(默认). 1=动态分配(待实现).
@@ -46,9 +46,12 @@
 
 /* *************** Define ****************** */
   #define MAX_SUPPORT_CANDEV             (3)
-  #define CAN1_INDEX                     (0)
-  #define CAN2_INDEX                     (1)
-  #define CAN3_INDEX                     (2)
+    #define CAN1_INDEX             (0)
+    #define CAN2_INDEX             (1)
+    #define CAN3_INDEX             (2)
+  #define MAX_SUPPORT_RXFIFO             (2)
+    #define FIFO_IDX_0             (0)
+    #define FIFO_IDX_1             (1)
 
   #define CAN_FILTER_RTR_NONE            (0)
   #define CAN_FILTER_RTR_ID1             (1UL << 0)
@@ -218,11 +221,11 @@ struct Cus_CAN_Device
   #endif 
 
   HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
-  HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf );
+  HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_Idx );
   HAL_StatusTypeDef (*EnableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
   HAL_StatusTypeDef (*DisableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
   bool (*CheckInterrupt)( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
-  uint8_t (*registerRxBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
+  uint8_t (*registerRxBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size, uint8_t FIFO_idx );
 
   void *private;
   #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
@@ -262,7 +265,7 @@ CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
-int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev );
+int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx );
 void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 /* ----------------------------------------------------------------- */
@@ -380,7 +383,7 @@ void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev );
  *       初始化完成后不会自动启动 CAN，需用户自行调用 Cus_CAN_Start()。
  *       若需接收数据，还需配置过滤器（可调用 Cus_Filter_QuickConfig）。
  */
-__weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio );
+__weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio, Cus_CAN_Mode_t mode );
 
 
 /**
@@ -402,7 +405,7 @@ __weak HAL_StatusTypeDef Cus_Filter_QuickConfig( CAN_TypeDef *instance );
  * @note 依次调用 Cus_CAN_QuickConfig、Cus_Filter_QuickConfig 和 Cus_CAN_Start。
  *       适用于最简测试场景，用户无需额外操作即可开始收发。
  */
-__weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio );
+__weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio, Cus_CAN_Mode_t mode );
 
 /* ----------------------------------------------------------------- */
 
