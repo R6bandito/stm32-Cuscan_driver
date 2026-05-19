@@ -1327,7 +1327,7 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
  * @brief 快速配置 CAN（默认普通模式，500kbps）
  * @note 弱函数，用户可覆盖。可自定义快速启动配置。
  */
-__attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio )
+__attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio, Cus_CAN_Mode_t mode )
 {
   if ( !instance || !g_gpio )   return HAL_ERROR;
 
@@ -1346,7 +1346,17 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef 
 
   pInit->baudrate = CAN_BAUDRATE_500K;
   pInit->Instance = instance;
-  pInit->Mode = MODE_LOOPBACK;
+
+  switch (mode)
+  {
+    case MODE_LOOPBACK: pInit->Mode = MODE_LOOPBACK; break;
+    case MODE_NORMAL: pInit->Mode = MODE_NORMAL; break;
+    case MODE_SILENT: pInit->Mode = MODE_SILENT; break;
+    case MODE_SILENT_LPBACK: pInit->Mode = MODE_SILENT_LPBACK; break;
+
+    default: pInit->Mode = MODE_NORMAL; break;
+  }
+
   pInit->is_AutoBusOff = false;
   pInit->is_AutoRestransmission = false;
   pInit->is_AutoWakeUP = false;
@@ -1413,12 +1423,12 @@ __attribute__((used)) __weak HAL_StatusTypeDef Cus_Filter_QuickConfig( CAN_TypeD
  * @brief 一键配置CAN启动
  * @note 弱函数，用户可覆盖。可自定义快速启动配置。
  */
-__attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio )
+__attribute__((used)) __weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio, Cus_CAN_Mode_t mode )
 {
   if ( !instance || !g_gpio )   return HAL_ERROR;
   
   HAL_StatusTypeDef hReturn;
-  hReturn = Cus_CAN_QuickConfig(instance, g_gpio);
+  hReturn = Cus_CAN_QuickConfig(instance, g_gpio, mode);
   if ( hReturn != HAL_OK )  return HAL_ERROR;
 
   hReturn = Cus_Filter_QuickConfig(instance);
@@ -1529,11 +1539,7 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
     {
       TxFreeStackIndex = 0;
       FreeStackCount = TX_NODE_POLL_SIZE;
-      is_NodePollInit = true;
-    }
 
-    if ( !is_NodePollInit )
-    {
       for( uint8_t i = 0; i < TX_NODE_POLL_SIZE; i++ )
       {
         s_TxNodePoll[i].next = NULL;
@@ -1543,8 +1549,9 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
   
         s_TxNodeFreeStack[TxFreeStackIndex++] = &s_TxNodePoll[i];     // 将节点池中节点依次压栈空闲指针栈(初始时，所有节点空闲).
       }
-    }
 
+      is_NodePollInit = true;
+    }
   }
 
 
