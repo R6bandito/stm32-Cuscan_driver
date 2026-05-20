@@ -25,6 +25,25 @@ extern void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
 
 /* *************************************************************** */
 
+#if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+  #if defined(FREERTOS_CONFIG_H)
+    #error "At current version. USE_DEFAULT_RxFIFO_FULL_HOOK not supposed FreeRTOS."
+  #endif
+
+  void PendSV_Handler( void )
+  {
+    {
+      /* Don't change this field code. */
+      Cus_CAN_ProcessBackupBuffers();
+    }
+  
+    {
+      /* Your Code Here. */
+    }
+  }
+#endif 
+
+
 void USB_LP_CAN1_RX0_IRQHandler( void )
 {
   HAL_CAN_IRQHandler(Cus_CAN_getHandle(CAN1));
@@ -330,9 +349,10 @@ __weak void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef ha
 }
 
 
-__weak void Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev )
+__weak uint8_t Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev, uint8_t FIFO_Idx )
 {
   UNUSED(pDev);
+  UNUSED(FIFO_Idx);
 }
 
 

@@ -6,9 +6,6 @@ static CAN_HandleTypeDef canHandle[MAX_SUPPORT_CANDEV] = { 0 };
 static Cus_CAN_Device_t *CanDevice[MAX_SUPPORT_CANDEV];
 static uint8_t s_CanDeviceUsed[MAX_SUPPORT_CANDEV];
 
-#if (USE_DEFAULT_RxFIFO_FULL_HOOK)
-  void *g_pBackUP_Array[MAX_FIFO_FULL_COUNT];
-#endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
 #if (USE_SEND_ASYNC) && (!SEND_ASYNC_NodePOLL_DYNAMIC)
   static TxMsgNode_t s_TxNodePoll[TX_NODE_POLL_SIZE];           // 空闲节点内存池.
@@ -33,6 +30,18 @@ typedef struct Cus_Private
   uint16_t max_msgNum[MAX_SUPPORT_RXFIFO];
 
   Cus_CAN_RxMsg_t *pRing[MAX_SUPPORT_RXFIFO];        // 将 pBuffer 强制转换为 Cus_CAN_RxMsg_t* 后的指针
+
+  #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+    void *pRingFullBackUP[BACKUP_BUFFER_LIMIT_NUM];      // 当前空闲备份缓冲区指针.
+
+    uint8_t backupBuf_Valid;    // 有效缓冲区数目. 
+    uint32_t backupBuf_size[BACKUP_BUFFER_LIMIT_NUM];   // 记录每个新缓冲区大小.
+    uint32_t backupBuf_Bitmap;                          // 32位位图(为0则表示该缓冲区正被使用. 为1则表示空闲可用).
+
+    uint16_t backup_head[BACKUP_BUFFER_LIMIT_NUM];      // head备份
+    uint16_t backup_tail[BACKUP_BUFFER_LIMIT_NUM];      // tail备份
+    uint8_t backup_fifo_source[BACKUP_BUFFER_LIMIT_NUM];  // 记录每个槽来自哪个 FIFO
+  #endif 
 
   #if (USE_SEND_ASYNC)
     TxMsgNode_t *TxHead;         // 发送队列头. 
@@ -67,6 +76,7 @@ int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
 CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+int8_t Cus_CAN_getIsDeviceUsed( uint8_t index );
 int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx );
 
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
@@ -81,6 +91,7 @@ void Cus_CAN_Filter_SetExtMask32( CANFilterConfig_t *pFilter, uint8_t Filter_MAS
 void Cus_CAN_Filter_SetStdMask16( CANFilterConfig_t *pFilter, uint8_t Filter_MASK_RTR, uint16_t id1, uint16_t id1_mask, uint16_t id2, uint16_t id2_mask );
 
 static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size, uint8_t FIFO_idx );
+static uint8_t Cus_CAN_registerBackUPBUffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
 static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
 static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_Idx );
@@ -96,6 +107,13 @@ static void __release_filter( CANFilterConfig_t **pFilter );
 static void __canTCB_release( Cus_CAN_Device_t ** pDevice );
 
 static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, uint32_t *prescaler, uint32_t *pbs1, uint32_t *pbs2);
+
+#if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+  void Cus_CAN_SetBackupHook( Cus_CAN_Device_t *pDev, void (*Hook)(Cus_CAN_Device_t *pDev, uint8_t FIFO_idx,
+                                                                      Cus_CAN_RxMsg_t *pData, uint16_t head, uint16_t tail) );
+  
+  void Cus_CAN_ProcessBackupBuffers( void );
+#endif 
 
 #if (!CAN_TCB_ALLOC_DYNAMIC)
   static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice );
@@ -293,8 +311,19 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
 
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       (*pDevice)->is_RingFIFO_Full = false;
-      (*pDevice)->RingFIFOFull_Count = 0;
-      (*pDevice)->pBackUPRecv_Buf = g_pBackUP_Array;
+      (*pDevice)->registerBackUPBuffer = Cus_CAN_registerBackUPBUffer;
+      (*pDevice)->BackupBufferHook = NULL;
+
+      for( uint8_t i = 0; i < BACKUP_BUFFER_LIMIT_NUM; i++ )
+      {
+        pPrivate->pRingFullBackUP[i] = NULL;
+        pPrivate->backup_head[i] = 0;
+        pPrivate->backup_tail[i] = 0;
+        pPrivate->backup_fifo_source[i] = FIFO_IDX_0;
+      }
+
+      pPrivate->backupBuf_Valid = 0;
+      pPrivate->backupBuf_Bitmap = 0xFFFFFFFF;
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
     s_CanDeviceUsed[index] = 1;
@@ -368,8 +397,19 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
 
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       pTCB->is_RingFIFO_Full = false;
-      pTCB->RingFIFOFull_Count = 0;
-      pTCB->pBackUPRecv_Buf = g_pBackUP_Array;
+      pTCB->registerBackUPBuffer = Cus_CAN_registerBackUPBUffer;
+      pTCB->BackupBufferHook = NULL;
+
+      for( uint8_t i = 0; i < BACKUP_BUFFER_LIMIT_NUM; i++ )
+      {
+        pPriv->pRingFullBackUP[i] = NULL;
+        pPriv->backup_head[i] = 0;
+        pPriv->backup_tail[i] = 0;
+        pPriv->backup_fifo_source[i] = FIFO_IDX_0;
+      }
+
+      pPriv->backupBuf_Valid = 0;
+      pPriv->backupBuf_Bitmap = 0xFFFFFFFF;
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
     *pDevice = pTCB;
@@ -412,6 +452,14 @@ static void __canTCB_release_Static( Cus_CAN_Device_t ** pDevice )  { UNUSED(pDe
   }
 
 
+  int8_t Cus_CAN_getIsDeviceUsed( uint8_t index )
+  {
+    if ( index > MAX_SUPPORT_CANDEV - 1 )   return -1;
+
+    return (int8_t)s_CanDeviceUsed[index];
+  }
+
+
   int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx )
   {
     if ( !pDev || !pDev->Instance || !pDev->canHandle )   return -1;
@@ -437,6 +485,10 @@ void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev )
 
   int8_t index = Cus_CAN_getIndex((*pDev)->Instance);
   if ( index < 0 )   return;
+
+  (*pDev)->DisableInterrupt(*pDev, CAN_IT_RX_FIFO0_MSG_PENDING | 
+                                   CAN_IT_TX_MAILBOX_EMPTY | 
+                                   CAN_IT_RX_FIFO1_MSG_PENDING );
 
 /* -------------- 复位 CAN 外设 ------------------ */
   HAL_CAN_AbortTxRequest(phcan, CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2);   // 中止可能的Tx请求.
@@ -1283,6 +1335,26 @@ static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, 
 }
 
 
+static uint8_t Cus_CAN_registerBackUPBUffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size )
+{
+  if ( !pDev->canHandle || !pDev || !pBuffer || size == 0 || size > UINT32_MAX )  return 0xFF;
+
+  Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
+  if ( !pPrivate )    return 0xFF;
+
+  /* 上限检查. */
+  if ( pPrivate->backupBuf_Valid >= BACKUP_BUFFER_LIMIT_NUM ) return 0xFF;
+
+  /* 备份指针指向最后一个注册的缓冲区 */
+  pPrivate->pRingFullBackUP[pPrivate->backupBuf_Valid] = pBuffer;
+
+  /* 存入当前传入的缓冲区大小,并更新缓冲区有效数目 */
+  pPrivate->backupBuf_size[pPrivate->backupBuf_Valid++] = size;
+
+  return 0;
+}
+
+
 /**
  * @brief 中断回调中调用，将收到的 CAN 消息存入环形缓冲区
  * @param pDev 指向 CAN 设备对象的指针
@@ -1304,15 +1376,15 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
 {
   if ( !pDev || !pDev->canHandle )  return;
 
-  if ( ((Cus_CAN_Priv_t *)pDev->private)->RxBuffer == NULL || ((Cus_CAN_Priv_t *)pDev->private)->pRing == NULL )  // 用户未注册缓冲区.
+  uint8_t FIFO_idx = (FIFO == CAN_RX_FIFO0 ? FIFO_IDX_0 : FIFO_IDX_1);
+
+  if ( ((Cus_CAN_Priv_t *)pDev->private)->RxBuffer[FIFO_idx] == NULL || ((Cus_CAN_Priv_t *)pDev->private)->pRing[FIFO_idx] == NULL )  // 用户未注册缓冲区.
   {
     Cus_CAN_RxMsg_t dummy_msg;
     HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &dummy_msg.RxHeader, dummy_msg.RxData);
 
     return;   // 缓冲区未注册. 读取FIFO清中断后直接返回.
   }
-
-  uint8_t FIFO_idx = (FIFO == CAN_RX_FIFO0 ? FIFO_IDX_0 : FIFO_IDX_1);
 
   Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
   uint16_t next_head = ( pPrivate->head[FIFO_idx] + 1 ) % pPrivate->max_msgNum[FIFO_idx]; // 计算下一个写入位置.
@@ -1323,13 +1395,21 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
       // 读取一次FIFO. 清除中断.
       Cus_CAN_RxMsg_t dummy_msg;
       HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &dummy_msg.RxHeader, dummy_msg.RxData);
-      Cus_CANRecvITFull_Hook( pDev );
+      Cus_CANRecvITFull_Hook( pDev, FIFO_idx );
       return;
     #endif 
 
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       // 自定义处理机制.
-      Cus_CANRecvITFull_Hook( pDev );
+      uint8_t ret = Cus_CANRecvITFull_Hook( pDev, FIFO_idx );
+      if ( ret )
+      {
+        /* 备份机制失效. 空读数据清中断后返回. */
+        Cus_CAN_RxMsg_t dummy_msg;
+        HAL_CAN_GetRxMessage(pDev->canHandle, FIFO, &dummy_msg.RxHeader, dummy_msg.RxData);
+        return;
+      }
+
       next_head = ( pPrivate->head[FIFO_idx] + 1 ) % pPrivate->max_msgNum[FIFO_idx];    // Default Hook 内部由于重置了状态. 所以此处重新计算next_head. 确保下次写入逻辑偏移正确.
     #endif 
   }
@@ -1717,37 +1797,112 @@ __set_PRIMASK(primask);
 
 
 
+
+
 /* -------------------------------- Default Feature ------------------------------------ */
 #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
-  void Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev )
+  void Cus_CAN_SetBackupHook( Cus_CAN_Device_t *pDev, void (*Hook)(Cus_CAN_Device_t *pDev, uint8_t FIFO_idx,
+                                                                        Cus_CAN_RxMsg_t *pData, uint16_t head, uint16_t tail) )
   {
-    if ( !pDev || !pDev->canHandle )    return;
+    if ( !pDev || !pDev->canHandle || !Hook )   return;
 
-    if ( pDev->RingFIFOFull_Count >= MAX_FIFO_FULL_COUNT )   return;
+    /* 注册用户回调 */
+    pDev->BackupBufferHook = Hook;
+  }
+
+
+  void Cus_CAN_ProcessBackupBuffers( void )
+  {
+    for( uint8_t index = CAN1_INDEX; index < MAX_SUPPORT_CANDEV; index++ )
+    {
+      if ( s_CanDeviceUsed[index] )
+      {
+        /* 该设备正在被使用. 检查是否是该设备发生溢出. */
+        Cus_CAN_Device_t *pDev = CanDevice[index];
+        Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
+
+        for( uint8_t slot = 0; slot < pPrivate->backupBuf_Valid; slot++ )
+        {
+          /* 从低位开始遍历位图. 找到第一个目前待处理的缓冲区 */
+          if ( pPrivate->backupBuf_Bitmap & (0x01 << slot) )   continue;    // 空闲. 跳过该槽.
+
+          /* 找到需要处理的槽. */
+          if ( pDev->BackupBufferHook )
+          {
+            /* 用户已注册回调. 调用用户回调. */
+            pDev->BackupBufferHook( pDev, 
+              pPrivate->backup_fifo_source[slot], 
+              (Cus_CAN_RxMsg_t *)pPrivate->pRingFullBackUP[slot], 
+              pPrivate->backup_head[slot], 
+              pPrivate->backup_tail[slot] );
+          }
+
+          /* 归还位图. */
+          pPrivate->backupBuf_Bitmap |= (0x01 << slot);
+
+          /* 状态重置 */
+          pPrivate->backup_head[slot] = 0;
+          pPrivate->backup_tail[slot] = 0;
+        }
+      }
+    }
+  }
+
+
+  uint8_t Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx )
+  {
+    if ( !pDev || !pDev->canHandle )    return 0xFF;
 
     Cus_CAN_Priv_t *Private = (Cus_CAN_Priv_t *)pDev->private;
-    size_t total_size = Private->buffer_Size + 2 * sizeof(uint16_t);  
 
-#warning "if malloc failed. Plz check your heap_size."
-    uint8_t * const pBackup = (uint8_t *)malloc(total_size);   // 多开辟四个4字节用于存储 head tail等关键信息.
-    if ( !pBackup )   return;       // 空间申请失败. 处理失效.
+    /* 检查是否注册过备份缓冲区. */
+    if ( Private->backupBuf_Valid == 0 )  return 0xFF;
 
-    uint8_t *pWrite = pBackup;
-    *(volatile uint16_t *)pWrite = Private->head;
-    pWrite += sizeof(uint16_t);
+    /* 遍历位图. 找出目前空闲的缓冲区索引. */
+    uint8_t freeIndex;
+    for( freeIndex = 0; freeIndex < BACKUP_BUFFER_LIMIT_NUM; freeIndex++ )
+    {
+      if ( Private->backupBuf_Bitmap & (0x01 << freeIndex) )  break;
+    }
+    if ( freeIndex >= BACKUP_BUFFER_LIMIT_NUM ) return 0xFF;
 
-    *(volatile uint16_t *)pWrite = Private->tail;
-    pWrite += sizeof(uint16_t);
+    void *swap;
 
-    memcpy(pWrite, Private->RxBuffer, Private->buffer_Size);
-    // memset(Private->RxBuffer, 0, Private->buffer_Size);  // 拷贝后清除原缓冲区数据(可选，为了性能考虑此处关闭).
+    /* 原始指针 RxBuffer 交换.*/
+    swap = Private->RxBuffer[FIFO_idx];
+    Private->RxBuffer[FIFO_idx] = Private->pRingFullBackUP[freeIndex];
 
-    // 状态复原.
-    Private->head = 0;
-    Private->tail = 0;
-    pDev->pBackUPRecv_Buf[pDev->RingFIFOFull_Count] = (void *)pBackup;
-    pDev->RingFIFOFull_Count++;
+    /* 环形缓冲区指针交换. */
+    Private->pRing[FIFO_idx] = (Cus_CAN_RxMsg_t *)Private->pRingFullBackUP[freeIndex];
+
+    /* 将旧指针塞回备份槽. */
+    Private->pRingFullBackUP[freeIndex] = swap;
+
+    /* 指针交换完毕. 位图更新. */
+    Private->backupBuf_Bitmap &= ~(0x01 << freeIndex);
+
+    /* 将 旧head tail 保存.并记录溢出FIFO号 */
+    Private->backup_head[freeIndex] = Private->head[FIFO_idx];
+    Private->backup_tail[freeIndex] = Private->tail[FIFO_idx];
+    Private->backup_fifo_source[freeIndex] = FIFO_idx;
+
+    /* 计算当前新换入的缓冲区元数据. */
+    Private->buffer_Size[FIFO_idx] = Private->backupBuf_size[freeIndex];
+    Private->max_msgNum[FIFO_idx] = Private->buffer_Size[FIFO_idx] / sizeof(Cus_CAN_RxMsg_t);
+
+    /* 置标志. */
     pDev->is_RingFIFO_Full = true;
+
+    /* 状态复原. */
+    Private->head[FIFO_idx] = 0;
+    Private->tail[FIFO_idx] = 0;
+
+    /* 挂起PendSV. */
+    /* 此时. 旧的缓冲区已经被撤下，位图已被更新，新的缓冲区也已被换上继续工作. 挂起PendSV准备后续处理工作. */
+    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
+
+    /* Normal Back. */
+    return 0;
   }
 #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 /* ------------------------------------------------------------------------------------- */

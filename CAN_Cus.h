@@ -28,9 +28,9 @@
 
 
 /* *************** Feature ****************** */
-  #define USE_DEFAULT_RxFIFO_FULL_HOOK    (0)
+  #define USE_DEFAULT_RxFIFO_FULL_HOOK            (1)
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
-      #define MAX_FIFO_FULL_COUNT  (5)
+      #define BACKUP_BUFFER_LIMIT_NUM        (2)
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
   #define CAN_CFG_ALLOC_DYNAMIC           (1)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
@@ -228,10 +228,12 @@ struct Cus_CAN_Device
   uint8_t (*registerRxBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size, uint8_t FIFO_idx );
 
   void *private;
+
   #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
-    void **pBackUPRecv_Buf;
-    bool is_RingFIFO_Full;
-    uint8_t RingFIFOFull_Count;
+    bool is_RingFIFO_Full;                    // 缓冲区溢出标志.
+    uint8_t (*registerBackUPBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );    // 备份缓冲区注册API.
+    void (*BackupBufferHook)( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx,
+                                  Cus_CAN_RxMsg_t *pData, uint16_t head, uint16_t tail );       // 备份机制用户回调Hook.
   #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 };
 
@@ -265,9 +267,16 @@ CAN_HandleTypeDef *Cus_CAN_getHandle( CAN_TypeDef *instance );
 HAL_StatusTypeDef Cus_CAN_getRateInfo( CAN_TypeDef *instance, Cus_CAN_RateInfo_t *pOutInfo );
 Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
 int8_t Cus_CAN_getIndex( CAN_TypeDef *instance );
+int8_t Cus_CAN_getIsDeviceUsed( uint8_t index );
 int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx );
 void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+
+#if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+  void Cus_CAN_SetBackupHook( Cus_CAN_Device_t *pDev, void (*Hook)(Cus_CAN_Device_t *pDev, uint8_t FIFO_idx,
+                                                                      Cus_CAN_RxMsg_t *pData, uint16_t head, uint16_t tail) );
+  void Cus_CAN_ProcessBackupBuffers( void );
+#endif 
 /* ----------------------------------------------------------------- */
 
 
@@ -366,7 +375,7 @@ void Cus_FilterConfigFailed_Hook( CAN_HandleTypeDef *hcan, const CANFilterConfig
 void Cus_CANInitFailed_Hook( CAN_HandleTypeDef *hcan, const CANInitConfig_t *pInitConf, HAL_StatusTypeDef hal_status );
 void Cus_CANStartFailed_Hook( CAN_HandleTypeDef *hcan, HAL_StatusTypeDef hal_status );
 void Cus_CANSendFailed_Hook( Cus_CAN_Device_t *pDev, HAL_StatusTypeDef hal_status );
-void Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev );
+uint8_t Cus_CANRecvITFull_Hook( Cus_CAN_Device_t *pDev, uint8_t FIFO_Idx );
 void Cus_CANRecvITFailed_Hook ( Cus_CAN_Device_t *pDev );
 void Cus_CAN_OnDisableRxIT_NonEmpty( Cus_CAN_Device_t *pDev, uint16_t pendingCount, uint32_t interrupt_mask );
 
