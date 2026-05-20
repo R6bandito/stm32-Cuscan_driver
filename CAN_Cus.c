@@ -1335,26 +1335,6 @@ static uint8_t Cus_CAN_registerRXBuffer( Cus_CAN_Device_t *pDev, void *pBuffer, 
 }
 
 
-static uint8_t Cus_CAN_registerBackUPBUffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size )
-{
-  if ( !pDev->canHandle || !pDev || !pBuffer || size == 0 || size > UINT32_MAX )  return 0xFF;
-
-  Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
-  if ( !pPrivate )    return 0xFF;
-
-  /* 上限检查. */
-  if ( pPrivate->backupBuf_Valid >= BACKUP_BUFFER_LIMIT_NUM ) return 0xFF;
-
-  /* 备份指针指向最后一个注册的缓冲区 */
-  pPrivate->pRingFullBackUP[pPrivate->backupBuf_Valid] = pBuffer;
-
-  /* 存入当前传入的缓冲区大小,并更新缓冲区有效数目 */
-  pPrivate->backupBuf_size[pPrivate->backupBuf_Valid++] = size;
-
-  return 0;
-}
-
-
 /**
  * @brief 中断回调中调用，将收到的 CAN 消息存入环形缓冲区
  * @param pDev 指向 CAN 设备对象的指针
@@ -1801,6 +1781,26 @@ __set_PRIMASK(primask);
 
 /* -------------------------------- Default Feature ------------------------------------ */
 #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
+  static uint8_t Cus_CAN_registerBackUPBUffer( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size )
+  {
+    if ( !pDev->canHandle || !pDev || !pBuffer || size == 0 || size > UINT32_MAX )  return 0xFF;
+
+    Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
+    if ( !pPrivate )    return 0xFF;
+
+    /* 上限检查. */
+    if ( pPrivate->backupBuf_Valid >= BACKUP_BUFFER_LIMIT_NUM ) return 0xFF;
+
+    /* 备份指针指向最后一个注册的缓冲区 */
+    pPrivate->pRingFullBackUP[pPrivate->backupBuf_Valid] = pBuffer;
+
+    /* 存入当前传入的缓冲区大小,并更新缓冲区有效数目 */
+    pPrivate->backupBuf_size[pPrivate->backupBuf_Valid++] = size;
+
+    return 0;
+  }
+
+
   void Cus_CAN_SetBackupHook( Cus_CAN_Device_t *pDev, void (*Hook)(Cus_CAN_Device_t *pDev, uint8_t FIFO_idx,
                                                                         Cus_CAN_RxMsg_t *pData, uint16_t head, uint16_t tail) )
   {
@@ -1945,7 +1945,7 @@ __set_PRIMASK(primask);
 
     CAN_RxHeaderTypeDef RxHeader;
     U8 rxdata[8];                   // 经典CAN. 8帧数据段.
-    if ( pDev->Receive_IT && pDev->Receive_IT(pDev, &RxHeader, rxdata) == HAL_OK )
+    if ( pDev->Receive_IT && pDev->Receive_IT(pDev, &RxHeader, rxdata, FIFO_IDX_0) == HAL_OK )
     {
       if ( RxHeader.IDE == CAN_ID_STD )   *pcanId = RxHeader.StdId;
 

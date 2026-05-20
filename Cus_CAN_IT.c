@@ -79,7 +79,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback( CAN_HandleTypeDef *hcan )
         Cus_CAN_Device_t * pDev = Cus_CAN_getControlBlock(hcan->Instance);
         CAN_RxHeaderTypeDef RxHeader;
         U8 buffer[8];
-        pDev->Receive_IT(pDev, &RxHeader, buffer);
+        pDev->Receive_IT(pDev, &RxHeader, buffer, FIFO_IDX_0);
         Cus_Cantp_RecieveFrame(buffer, RxHeader.DLC, RxHeader.StdId);
       #endif 
     }
@@ -116,7 +116,7 @@ void HAL_CAN_RxFifo1MsgPendingCallback( CAN_HandleTypeDef *hcan )
         Cus_CAN_Device_t * pDev = Cus_CAN_getControlBlock(hcan->Instance);
         CAN_RxHeaderTypeDef RxHeader;
         U8 buffer[8];
-        pDev->Receive_IT(pDev, &RxHeader, buffer);
+        pDev->Receive_IT(pDev, &RxHeader, buffer, FIFO_IDX_1);
         Cus_Cantp_RecieveFrame(buffer, RxHeader.DLC, RxHeader.StdId);
       #endif 
     }

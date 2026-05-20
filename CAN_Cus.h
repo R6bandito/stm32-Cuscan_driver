@@ -24,17 +24,17 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-// #include "Cus_CANTP.h"
+#include "Cus_CANTP.h"
 
 
 /* *************** Feature ****************** */
-  #define USE_DEFAULT_RxFIFO_FULL_HOOK            (1)
+  #define USE_DEFAULT_RxFIFO_FULL_HOOK            (0)
     #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
       #define BACKUP_BUFFER_LIMIT_NUM        (2)
     #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 
-  #define CAN_CFG_ALLOC_DYNAMIC           (1)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
-  #define CAN_TCB_ALLOC_DYNAMIC           (1)     // 设备结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
+  #define CAN_CFG_ALLOC_DYNAMIC           (0)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
+  #define CAN_TCB_ALLOC_DYNAMIC           (0)     // 设备结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
   #define USE_SEND_ASYNC                  (1)     // 是否启用异步发送: 0=不启用异步发送(发送为阻塞式). 1=启用异步发送(添加异步发送API).
     #if (USE_SEND_ASYNC)
       #define SEND_ASYNC_NodePOLL_DYNAMIC (0)     // 发送队列节点池内存分配方式: 0=静态分配(默认). 1=动态分配(待实现).
