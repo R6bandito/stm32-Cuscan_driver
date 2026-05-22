@@ -22,11 +22,8 @@ extern void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
 /* ------------------------------------------------------------------- */
 
 
-
-/* *************************************************************** */
-
 #if (USE_DEFAULT_RxFIFO_FULL_HOOK)
-  #if defined(FREERTOS_CONFIG_H)
+  #if (USE_RTOS)
     #error "At current version. USE_DEFAULT_RxFIFO_FULL_HOOK not supposed FreeRTOS."
   #endif
 
