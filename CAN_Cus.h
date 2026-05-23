@@ -35,7 +35,7 @@
   #define CAN_CFG_ALLOC_DYNAMIC           (0)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
   #define CAN_TCB_ALLOC_DYNAMIC           (0)     // 设备结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
 
-  #define USE_SEND_ASYNC                  (0)     // 是否启用异步发送: 0=不启用异步发送(发送为阻塞式). 1=启用异步发送(添加异步发送API).
+  #define USE_SEND_ASYNC                  (1)     // 是否启用异步发送: 0=不启用异步发送(发送为阻塞式). 1=启用异步发送(添加异步发送API).
     #if (USE_SEND_ASYNC)
       #define SEND_ASYNC_NodePOLL_DYNAMIC (0)     // 发送队列节点池内存分配方式: 0=静态分配(默认). 1=动态分配(待实现).
     #endif // USE_SEND_ASYNC
@@ -46,7 +46,32 @@
     #endif 
 
   #define USE_RTOS                        (0)     // 是否使用OS版本: 0=不使用(默认). 1=使用OS.
+    #if (USE_RTOS)
+      /* 请根据所使用的操作系统. 将对应的头文件贴于此处进行覆盖. 默认以 FreeRTOS 进行示例 */
+      #include "FreeRTOS.h"
+    #endif 
+
+    #if (USE_RTOS)
+      /* 请根据所使用的操作系统. 将对应的操作系统所能管理的中断最大优先级数值或宏定义贴于此处. 默认以 FreeRTOS 进行示例 */
+      #define Cus_SYSCALL_INTERRUPT_PRIORITY      configMAX_SYSCALL_INTERRUPT_PRIORITY
+    #endif 
 /* ************************************************* */
+
+
+#if (USE_RTOS)
+  #define Cus_CAN_ENTER_CRITICAL()               do { __cu_mask = __get_BASEPRI(); \
+                                                      __set_BASEPRI(Cus_SYSCALL_INTERRUPT_PRIORITY << (8 - __NVIC_PRIO_BITS)); \
+                                                    } while(0)
+                                                
+  #define Cus_CAN_EXIT_CRITICAL()                do { __set_BASEPRI(__cu_mask); } while(0)
+#elif (!USE_RTOS)
+  #define Cus_CAN_ENTER_CRITICAL()              do {  \
+                                                      __cu_mask = __get_PRIMASK();  \
+                                                      __disable_irq()               \
+                                                   } while(0)
+
+  #define Cus_CAN_EXIT_CRITICAL()               do { __set_PRIMASK(__cu_mask); } while(0)
+#endif 
 
 
 /* *************** Macros & Constants ****************** */

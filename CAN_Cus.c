@@ -665,6 +665,8 @@ void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev )
 
   HAL_CAN_Stop(phcan);
 
+  s_CanDeviceUsed[index] = 0;
+  CanDevice[index] = NULL;
   HAL_CAN_DeInit(phcan);
 /* ---------------------------------------------- */
 
@@ -684,8 +686,6 @@ void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev )
     Cus_CAN_Device_t *pDevbuffer = &s_CanDevicePool[index];
     memset(pDevbuffer, 0, sizeof(Cus_CAN_Device_t));
   #endif 
-
-  s_CanDeviceUsed[index] = 0;
 } 
 
 static HAL_StatusTypeDef CAN_GetTimingFromBaudrate(Cus_CAN_Baudrate_t Baudrate, uint32_t *prescaler, uint32_t *pbs1, uint32_t *pbs2)
@@ -793,9 +793,13 @@ int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_id
   Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
   if ( !pPriv->RxBuffer[FIFO_idx] || !pPriv->pRing[FIFO_idx] )    return -2;
 
+  uint32_t __cu_mask;
+  Cus_CAN_ENTER_CRITICAL();
+
   uint16_t head = pPriv->head[FIFO_idx];
   uint16_t tail = pPriv->tail[FIFO_idx];
   uint16_t max_num = pPriv->max_msgNum[FIFO_idx];
+  Cus_CAN_EXIT_CRITICAL();
 
   return (head - tail) % max_num;
 }
@@ -1391,10 +1395,15 @@ static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTy
     return HAL_ERROR;
   }
 
+  uint32_t __cu_mask;
+  Cus_CAN_ENTER_CRITICAL();
+
   Cus_CAN_RxMsg_t *pMsg = &pPrivate->pRing[FIFO_idx][pPrivate->tail[FIFO_idx]];
+  pPrivate->tail[FIFO_idx] = (pPrivate->tail[FIFO_idx] + 1) % pPrivate->max_msgNum[FIFO_idx];
+  Cus_CAN_EXIT_CRITICAL();
+
   *pHeader = pMsg->RxHeader;
   memcpy(Recv_Buf, pMsg->RxData, pMsg->RxHeader.DLC);
-  pPrivate->tail[FIFO_idx] = (pPrivate->tail[FIFO_idx] + 1) % pPrivate->max_msgNum[FIFO_idx];
 
   return HAL_OK;
 }
@@ -1680,14 +1689,16 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
   {
     if ( !pDev || !pDev->Instance )   return NULL;
 
+    uint32_t __cu_mask;
+
     Cus_CAN_Priv_t *pPri = (Cus_CAN_Priv_t *)pDev->private;
 
-__disable_irq();
+    Cus_CAN_ENTER_CRITICAL();
     // 先检查空闲栈是否仍可用.
     if ( FreeStackCount == 0 )
     {
       // 节点池已全部被分配,无空余空间. 返回空指针由上层进行处理.
-__enable_irq();
+      Cus_CAN_EXIT_CRITICAL();
       return NULL;
     }
 
@@ -1695,7 +1706,7 @@ __enable_irq();
     TxMsgNode_t *pNode = s_TxNodeFreeStack[--TxFreeStackIndex];   // 这里一定要是前置自减！
     pNode->canIndex = Cus_CAN_getIndex(pDev->Instance);
     FreeStackCount--;
-__enable_irq();
+    Cus_CAN_EXIT_CRITICAL();
 
     return pNode;
   }
@@ -1722,6 +1733,8 @@ __enable_irq();
   {
     if ( !pDev || !pDev->Instance || !Send_Buf )    return HAL_ERROR;
 
+    uint32_t __cu_mask;
+
     Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
 
     TxMsgNode_t *Send_Node = Cus_CAN_NodeAlloc(pDev);
@@ -1731,7 +1744,7 @@ __enable_irq();
     memcpy(Send_Node->data, Send_Buf, sizeof(Send_Node->data));
     Send_Node->TxHeader = Txheader;
 
-__disable_irq();
+    Cus_CAN_ENTER_CRITICAL();
     // 判断当前节点是否是队列第一个元素.
     if ( pPriv->TxHead == NULL && pPriv->TxTail == NULL )
     {
@@ -1769,7 +1782,7 @@ __disable_irq();
         return HAL_ERROR;
       }
     }
-__enable_irq();
+    Cus_CAN_EXIT_CRITICAL();
 
     return HAL_OK;
   }
@@ -1781,8 +1794,9 @@ __enable_irq();
 
     Cus_CAN_Priv_t *pPriv = (Cus_CAN_Priv_t *)pDev->private;
 
-uint32_t primask = __get_PRIMASK();
-__disable_irq();
+    uint32_t __cu_mask;
+    Cus_CAN_ENTER_CRITICAL();
+
     if ( pPriv->TxHead )
     {
       // 将当前已发送完成的节点0初始化后重新放回空闲指针栈.
@@ -1798,9 +1812,9 @@ __disable_irq();
 
       uint32_t TxMailbox;
       HAL_CAN_AddTxMessage(pDev->canHandle, &pPriv->TxCurrent->TxHeader, pPriv->TxCurrent->data, &TxMailbox);
-__set_PRIMASK(primask);
-      return;
+      Cus_CAN_EXIT_CRITICAL();
 
+      return;
     }
 
     // 释放最后一个节点.
@@ -1809,7 +1823,7 @@ __set_PRIMASK(primask);
 
     // 整个队列发送完毕.才置空闲标志位.
     pPriv->TxBusy = 1;    
-__set_PRIMASK(primask);
+    Cus_CAN_EXIT_CRITICAL();
   }
 #endif // USE_SEND_ASYNC
 /* *********************************************** Options Feature END ********************************************** */
