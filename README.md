@@ -67,7 +67,7 @@ Cus_CAN/
   提供了一键启动API：`Cus_CAN_QuickSetup()`（详见API Reference），调用后**一键完成 bxCAN外设初始化 + 过滤器初始化 + CAN启动**。用于快速搭建和验证通信环境。
 
   ```c
-    if ( Cus_CAN_QuickSetup(CAN1, &can1_gpio) != HAL_OK )
+    if ( Cus_CAN_QuickSetup(CAN1, &can1_gpio, MODE_LOOPBACK) != HAL_OK )
     {
       Error_Handler();
     }
@@ -146,7 +146,7 @@ Cus_CAN/
   Cus_CAN_Device_t *pDev = Cus_CAN_getControlBlock(CAN1);
   ```
 
-  成功获取设备控制块后，即可通过其成员回调函数进行发送/接收等操作。
+  成功获取设备控制块后，即可通过其成员回调函数进行发送/接收等操作。更具体和细致化的操作将在下文相关部分继续讲解。
 
   ```c
     uint8_t txD[] = { 1, 2, 3 };
@@ -175,6 +175,190 @@ Cus_CAN/
   // 无需调用 Self_Release.
   // 静态模式下也拥有 Self_Release 这个成员，这个设计主要是为了考虑在某些情况下与动态模式进行兼容. 在实现上是空实现，仅作占位.
   ```
+
+------
+
+## 核心配置宏
+
+### 功能配置
+
+|             宏名称             |                             描述                             | 默认值 |
+| :----------------------------: | :----------------------------------------------------------: | ------ |
+|  USE_DEFAULT_RxFIFO_FULL_HOOK  | 选择是否开启由本库默认提供的缓冲区溢出备份机制.0=不使用，1=使用.关闭该宏后将不启用相关API以及不编译相关代码。关闭状态下用户可自行重写Hook来自定义溢出后处理机制。 | 0      |
+|    BACKUP_BUFFER_LIMIT_NUM     | 这是一个子级宏，在USE_DEFAULT_RxFIFO_FULL_HOOK该宏开启的情况下有效，用于限制用户注册的备份缓冲区数目。设置该数目会影响对应处理机制的响应速度(更多的遍历)，以及增加RAM的占用，建议保持默认值。 | 2      |
+|     CAN_CFG_ALLOC_DYNAMIC      | bxCAN硬件配置相关结构体是否采用动态内存分配. 0=静态分配，1=动态分配.一般情况下建议保持默认值. | 0      |
+|     CAN_TCB_ALLOC_DYNAMIC      | CusCAN库内部靠维护实例控制块进行工作.该选项用于决定任务控制块是否通过动态方式进行分配. 0=静态分配，1=动态分配. 建议保持默认值. | 0      |
+|         USE_SEND_ASYNC         | 是否启用 异步发送模式 (非阻塞). 0=不启用，1=启用. 默认为0(使用阻塞发送模式，提交发送请求后，成功收到TXOK方才返回). 根据实际需求进行修改. | 0      |
+|  SEND_ASYNC_NodePOLL_DYNAMIC   | 这是一个子级宏，在USE_SEND_ASYNC开启的情况下有效. 用于选择发送队列的节点来源于动态分配还是静态分配. 0=静态分配，1=动态分配(当前版本待实现). 建议使用默认值并在上层采用失败重试机制. | 0      |
+|         USE_CUS_CANTP          | 是否启用配套的Cus_CANTP库. 本库内部封装了一个发送API供Cus_CANTP使用，并且配套的Cus_CAN_IT.c机制中将会开启CANTP通路.  0=不启用，1=启用. 根据实际需求修改(本库不包含CANTP核心代码，详见 Cus_CANTP 库) | 0      |
+|            USE_RTOS            | 是否启用 RTOS 适配模式. 若运行在 RTOS 环境中请将其开启，并按照文件中指导进行对应的移植操作. 0=裸机环境，1=RTOS环境. | 0      |
+| Cus_SYSCALL_INTERRUPT_PRIORITY | 这是一个子级宏，在USE_RTOS开启的情况下有效.用于获取当前操作系统所管理的中断最大优先级，为库中临界区管理部分使用. 请根据使用的操作系统来正确设置. | N/A    |
+
+------
+
+### 宏定义
+
+| 宏名称                             | 描述                                                         | 默认值 |
+| ---------------------------------- | ------------------------------------------------------------ | ------ |
+| MAX_SUPPORT_CANDEV                 | 最大支持 CAN 实例数（CAN1~CAN3）。该值反映的就是该库中CAN实例对象的数目(一个CAN实例对应一个操作对象)。默认为3，若所用控制器并不支持多个CAN(例：STM32F1大部分常规系列)，可以自行减小该值来节省RAM。不建议增大该值（也没有必要增大）。 | 3      |
+| CAN1_INDEX\|CAN2_INDEX\|CAN3_INDEX | CAN 实例在内部数组中的索引。通常情况无需改动。               | 0/1/2  |
+| MAX_SUPPORT_RXFIFO                 | 每个 CAN 实例的 FIFO 数量。请根据底层CAN硬件的具体配置来设置。例如：STM32F103C8T6 的bxCAN硬件有两个FIFO(FIFO0/FIFO1)，则该值设置为2。在资源十分有限的设备上，若你确保在整个通信过程中只使用一个FIFO，也可以将其设置为1以此来节省RAM开销。 | 2      |
+| FIFO0_IDX_0 \| FIFO_IDX_1          | FIFO0/FIFO1 在内部数组中的索引。可按需进行修改。例如：仅使用FIFO1，则可以删除FIFO0_IDX_0，并将FIFO_IDX_1定义为0。后续在对相关API的调用中，FIFO参数传参时传入该宏即可。该宏主要为了API调用传参的可读性而设计。 | 0/1    |
+| TX_NODE_POLL_SIZE                  | 该宏为一个子级宏，仅在USE_SEND_ASYNC有效且SEND_ASYNC_NodePOLL_DYNAMIC(不使用动态分配)无效的情况下有效。反映异步发送队列节点池大小(也可理解为队列长度大小)。在当前默认配置下，异步发送队列最多只允许同时挂起8帧发送请求。超出将返回错误并由上层进行对应处理。 | 8      |
+| CAN_FREE                           | 标记异步队列节点空闲状态（是否可用）。由于设计原因后续将考虑移除相关定义。不要修改。 | -1     |
+| CAN_FILTER_RTR_NONE                | 列表模式：所有 ID 仅收数据帧。                               | 0      |
+| CAN_FILTER_RTR_ID1` ~ `ID4         | 列表模式：对指定 ID 收远程帧。                               | 1<<0~3 |
+| CAN_FILTER_RTR_ALL                 | 列表模式：全部 ID 收远程帧。                                 | 组合值 |
+| CAN_FILTER_MASK_DATA               | 掩码模式：仅收数据帧。                                       | 0xAA   |
+| CAN_FILTER_MASK_REMOTE             | 掩码模式：仅收远程帧。                                       | 0xBB   |
+
+------
+
+## API Reference
+
+--------------------  初始化与生命周期管理 --------------------
+
+- **快速启动CAN通信**
+
+```c
+__weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio, Cus_CAN_Mode_t mode );
+```
+
+**参数**：
+
+- `CAN_TypeDef *instance`：所要快速启动的CAN实例。例如 CAN1。
+- `const Cus_CAN_GPIO_t *g_gpio`：驱动库中定义的 GPIO 专用配置类型（Cus_CAN_GPIO_t）配置变量指针。
+- `Cus_CAN_Mode_t mode`：启动模式（MODE_NORMAL/MODE_LOOPBACK/MODE_SILENT/MODE_SILENT_LPBACK）。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数非法/底层控制器配置或滤波器配置失败/CAN启动失败。
+- `HAL_OK`：快速启动成功。CAN控制器目前正在运行。
+
+**描述**：
+
+​	该API用于一键启动CAN通信（初始化CAN + 全通过滤器 + CAN启动），多用于快速组建通信环境以及通信测试。内部会自动使用一组通用的默认配置对用户所传入的CAN实例进行功能配置。默认配置如下：
+
+> Baudrate = 500K
+> AutoBusOff = false
+> AutoRestransmission = false
+> AutoWakeUP = false
+> ReceiveFifoLocked = false
+> TimeTriggeredMode = false
+> TransmitFifoPriority = false
+> SJW = 1Tq
+>
+> FIFO = FIFO0
+> FilterBank = 0
+> ID(High/Low/MaskHigh/MaskLow) = 0
+> Mode = IDMask
+> Scale = 32Bit
+
+**注意事项**：
+
+​	该API定义为了 __weak 形式，用户可自行覆盖并根据需要自行实现QuickSetup方法，无需修改库源码。
+
+------
+
+- **快速配置 bxCAN**
+
+```c
+__weak HAL_StatusTypeDef Cus_CAN_QuickConfig( CAN_TypeDef *instance, const Cus_CAN_GPIO_t *g_gpio, Cus_CAN_Mode_t mode );
+```
+
+**参数**：
+
+- `CAN_TypeDef *instance`：所要快速启动的CAN实例。例如 CAN1。
+- `const Cus_CAN_GPIO_t *g_gpio`：驱动库中定义的 GPIO 专用配置类型（Cus_CAN_GPIO_t）配置变量指针。
+- `Cus_CAN_Mode_t mode`：启动模式（MODE_NORMAL/MODE_LOOPBACK/MODE_SILENT/MODE_SILENT_LPBACK）。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数非法/Factory工厂返回错误。
+- `HAL_OK`：快速配置成功。
+
+**描述**：
+
+​	该API会采用默认配置（详见上文）对bxCAN进行配置，但是不会初始化过滤器以及启动CAN设备。QuickSetup的实现基础之一。
+
+**注意事项**：
+
+​	该API被定义为 __weak ，用户可使用自己的配置逻辑覆盖该方法。用自行逻辑覆盖后，调用QuickSetup 内部会按"你的 QuickConfig → 全通过滤 → Start"执行。
+
+------
+
+- **快速配置过滤器**
+
+```c
+__weak HAL_StatusTypeDef Cus_Filter_QuickConfig( CAN_TypeDef *instance );
+```
+
+**参数**：
+
+- `CAN_TypeDef *instance`：需要配置的CAN实例。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数非法/Factory工厂返回错误/过滤器初始化失败。
+- `HAL_OK`：过滤器快速配置成功。
+
+**描述**：
+
+​	快速配置全通过滤器，接收所有帧。
+
+**注意事项**：
+
+​	与上述 QuickConfig 一样，被定义为 __weak ，用户可使用自己逻辑进行覆盖，不影响QuickSetup调用。
+
+也可以将三个快速配置API全部采用自行逻辑覆盖，从而全面自定义和接管整个快速初始化流程。
+
+------
+
+- **启动CAN设备**
+
+```c
+HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
+```
+
+**参数**：
+
+- `CAN_TypeDef *instance`：所要启动的CAN实例。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数非法/实例无效（传入的CAN实例未经CusCAN库初始化，不属于CusCAN库管辖，不允许调用库API）
+- `HAL_OK`：启动成功。
+
+**描述**：
+
+​	启动所传入实例对应的CAN外设。
+
+**注意事项**：无
+
+------
+
+- **关闭设备（释放实例资源）**
+
+```c
+void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t **pDev`：所要关闭的CAN设备（二级指针）。
+
+**返回值**：无
+
+**描述**：
+
+​	该API用于关闭已经由CusCAN库初始化过的CAN实例，调用该API后所传入的实例控制块将被释放并回收资源。
+
+**注意事项**：
+
+​	该API可重入，线程安全。取决于TCB块的内存分配策略，有两种回收方式：
+
+- 动态分配：底层调用free释放由malloc分配的空间。并将传入的 pDev 置为 NULL。
+- 静态分配：清空对应内存区的字段。
 
 ------
 

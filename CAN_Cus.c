@@ -149,6 +149,7 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
 
 #if (USE_SEND_ASYNC)
   static void Cus_CAN_NodePollInit( Cus_CAN_Device_t *pDev );
+  static TxMsgNode_t *Cus_CAN_NodeAlloc( Cus_CAN_Device_t *pDev );
   static void Cus_CAN_FreeNode( TxMsgNode_t *pNode );
   static HAL_StatusTypeDef Cus_CAN_Send_IT( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
   void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
@@ -673,7 +674,6 @@ void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev )
   #if (CAN_TCB_ALLOC_DYNAMIC)
     // 动态分配: 释放TCB与私有数据.
     __canTCB_release(pDev);     // 释放后 *pDev 为NULL. 
-    CanDevice[index] = NULL;    // pDev也为NULL. 不能够再进行使用！ 除非重新初始化.
   #endif 
 
   #if (!CAN_TCB_ALLOC_DYNAMIC)
