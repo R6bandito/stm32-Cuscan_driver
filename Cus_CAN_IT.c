@@ -22,11 +22,7 @@ extern void Cus_CAN_ProcessTxQueue( Cus_CAN_Device_t *pDev );
 /* ------------------------------------------------------------------- */
 
 
-#if (USE_DEFAULT_RxFIFO_FULL_HOOK)
-  #if (USE_RTOS)
-    #error "At current version. USE_DEFAULT_RxFIFO_FULL_HOOK not supposed FreeRTOS."
-  #endif
-
+#if (USE_DEFAULT_RxFIFO_FULL_HOOK && !USE_RTOS)
   void PendSV_Handler( void )
   {
     {
@@ -365,6 +361,8 @@ __weak void Cus_CAN_OnDisableRxIT_NonEmpty( Cus_CAN_Device_t *pDev, uint16_t pen
   UNUSED(pendingCount);
   UNUSED(interrupt_mask);
 }
+
+
 
 
 

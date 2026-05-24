@@ -526,6 +526,15 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
       Cus_CAN_NodePollInit(*pDevice);     // 若开启异步发送. 则于此处进行初始化.
     #endif 
 
+    #if (USE_RTOS && CUS_CAN_RTOS_CMSIS && USE_DEFAULT_RxFIFO_FULL_HOOK)
+      static uint8_t Guard = 0;
+      if ( !Guard )
+      {
+        FIFO_Full_threadCreate();           // 若开启 RTOS 且使用  CMSIS移植层. 于此处创建任务(不开启调度).
+      }
+      Guard = 1;
+    #endif 
+
     return 0;   // Normal Back.
   }
 
@@ -596,6 +605,15 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
 
     #if (USE_SEND_ASYNC)
       Cus_CAN_NodePollInit(*pDevice);     // 若开启异步发送. 则于此处进行初始化.
+    #endif 
+
+    #if (USE_RTOS && CUS_CAN_RTOS_CMSIS && USE_DEFAULT_RxFIFO_FULL_HOOK)
+      static uint8_t Guard = 0;
+      if ( !Guard )
+      {
+        FIFO_Full_threadCreate();           // 若开启 RTOS 且使用  CMSIS移植层. 于此处创建任务(不开启调度).
+      }
+      Guard = 1;
     #endif 
 
     // 控制TCB不允许人为清理. 不注册清理函数.
@@ -801,7 +819,7 @@ int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_id
   uint16_t max_num = pPriv->max_msgNum[FIFO_idx];
   Cus_CAN_EXIT_CRITICAL();
 
-  return (head - tail) % max_num;
+  return (int16_t)((head - tail + max_num) % max_num);
 }
 /* ********************************************** Buffer Manager END ******************************************** */
 
@@ -948,7 +966,7 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
     bool is_RecvRx0OverRun_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO0_OVERRUN);
     if ( is_RecvRx0_IT || is_RecvRx0Full_IT || is_RecvRx0OverRun_IT )
     {
-      HAL_NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, 5, 0);
+      HAL_NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, 6, 0);
       HAL_NVIC_EnableIRQ(USB_LP_CAN1_RX0_IRQn);
     }
 
@@ -957,14 +975,14 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
     bool is_RecvRx1OverRun_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO1_OVERRUN);
     if ( is_RecvRx1_IT || is_RecvRx1Full_IT || is_RecvRx1OverRun_IT )
     {
-      HAL_NVIC_SetPriority(CAN1_RX1_IRQn, 5, 0);
+      HAL_NVIC_SetPriority(CAN1_RX1_IRQn, 6, 0);
       HAL_NVIC_EnableIRQ(CAN1_RX1_IRQn);
     }
 
     bool is_TxMailBoxCplt_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_TX_MAILBOX_EMPTY);
     if ( is_TxMailBoxCplt_IT )
     {
-      HAL_NVIC_SetPriority(USB_HP_CAN1_TX_IRQn, 5, 0);
+      HAL_NVIC_SetPriority(USB_HP_CAN1_TX_IRQn, 6, 0);
       HAL_NVIC_EnableIRQ(USB_HP_CAN1_TX_IRQn);
     }
 
@@ -1645,13 +1663,20 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
     /* 状态复原. */
     Private->head[FIFO_idx] = 0;
     Private->tail[FIFO_idx] = 0;
-
-    /* 挂起PendSV. */
-    /* 此时. 旧的缓冲区已经被撤下，位图已被更新，新的缓冲区也已被换上继续工作. 挂起PendSV准备后续处理工作. */
-    SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
+    Cus_CAN_BackupNotifyFromISR();
 
     /* Normal Back. */
     return 0;
+  }
+
+  __weak void Cus_CAN_BackupNotifyFromISR( void )
+  {
+    #if (!USE_RTOS)
+      /* 裸机场景. 挂起PendSV. */
+      /* 此时. 旧的缓冲区已经被撤下，位图已被更新，新的缓冲区也已被换上继续工作. 挂起PendSV准备后续处理工作. */
+      SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
+    #endif
+        /* RTOS 下默认空，用户链接 Cus_CAN_RTOS.c 或自行覆盖 */
   }
 #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 

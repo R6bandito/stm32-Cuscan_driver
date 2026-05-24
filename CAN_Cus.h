@@ -46,15 +46,31 @@
     #endif 
 
   #define USE_RTOS                        (0)     // 是否使用OS版本: 0=不使用(默认). 1=使用OS.
-    #if (USE_RTOS)
-      /* 请根据所使用的操作系统. 将对应的头文件贴于此处进行覆盖. 默认以 FreeRTOS 进行示例 */
-      #include "FreeRTOS.h"
-    #endif 
+    #define CUS_CAN_RTOS_CMSIS            (1)     // 0=用户自实现, 1=CMSIS-RTOS2 内置.
+    #if (USE_RTOS && CUS_CAN_RTOS_CMSIS)
+      #include "cmsis_os2.h"
+      #include "Cus_CAN_RTOS.h"
+    #elif (USE_RTOS && !CUS_CAN_RTOS_CMSIS)
+      #warning " If you need to use USE_DEFAULT_RxFIFO_FULL_HOOK. Plz make sure that  "
+    #endif
 
     #if (USE_RTOS)
-      /* 请根据所使用的操作系统. 将对应的操作系统所能管理的中断最大优先级数值或宏定义贴于此处. 默认以 FreeRTOS 进行示例 */
-      #define Cus_SYSCALL_INTERRUPT_PRIORITY      configMAX_SYSCALL_INTERRUPT_PRIORITY
+      /* 
+        请根据所使用的操作系统. 将对应的操作系统所能管理的中断最大优先级数值或宏定义贴于下方. 
+      */
+      // example: #define Cus_SYSCALL_INTERRUPT_PRIORITY    Your_Own_Setting 
+
+      /* 默认值适配 STM32 CubeMX 默认 NVIC 配置 (PreemptPriority=5, 4bit 分组) */
+      #ifndef Cus_SYSCALL_INTERRUPT_PRIORITY
+        #define Cus_SYSCALL_INTERRUPT_PRIORITY      (5) 
+        #pragma message "Cus_SYSCALL_INTERRUPT_PRIORITY not defined, using default 5"
+      #endif 
     #endif 
+
+
+    /* 若 CUS_CAN_RTOS_CMSIS = 0 && USE_RTOS == 1. 请务必在你的应用逻辑中重写该方法.否则若开启USE_DEFAULT_RxFIFO_FULL_HOOK. 缓冲区溢出后将会静默返回 */
+    /* 具体实现为发一个通知到你的处理函数中，并调用 Cus_CAN_ProcessBackupBuffers() */
+    __weak void Cus_CAN_BackupNotifyFromISR( void );
 /* ************************************************* */
 
 
@@ -67,7 +83,7 @@
 #elif (!USE_RTOS)
   #define Cus_CAN_ENTER_CRITICAL()              do {  \
                                                       __cu_mask = __get_PRIMASK();  \
-                                                      __disable_irq()               \
+                                                      __disable_irq();               \
                                                    } while(0)
 
   #define Cus_CAN_EXIT_CRITICAL()               do { __set_PRIMASK(__cu_mask); } while(0)
@@ -280,6 +296,7 @@ typedef struct
 HAL_StatusTypeDef Cus_CAN_Start( CAN_TypeDef *instance );
 void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
 void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev );
+
 
 /**
  * @brief 快速配置 CAN 外设（仅初始化，不含过滤器及启动）
