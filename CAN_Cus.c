@@ -127,7 +127,7 @@ int8_t Cus_CAN_getIsDeviceUsed( uint8_t index );
 
 /* ************************************ Send & Receive API ************************************* */
 static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
-static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
+static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_idx );
 static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_Idx );
 void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO );
 /* **************************************************************************************** */
@@ -1356,9 +1356,9 @@ static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeD
 
   switch (TxMailBox)
   {
-    case 1: txok_mask = CAN_TSR_TXOK0; break;
-    case 2: txok_mask = CAN_TSR_TXOK1; break;
-    case 4: txok_mask = CAN_TSR_TXOK2; break;
+    case CAN_TX_MAILBOX0: txok_mask = CAN_TSR_TXOK0; break;
+    case CAN_TX_MAILBOX1: txok_mask = CAN_TSR_TXOK1; break;
+    case CAN_TX_MAILBOX2: txok_mask = CAN_TSR_TXOK2; break;
     default: return HAL_ERROR;
   }
 
@@ -1376,16 +1376,18 @@ static HAL_StatusTypeDef Cus_CAN_Send( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeD
   return HAL_OK;
 }
 
-static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo )
+static HAL_StatusTypeDef Cus_CAN_Recv( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_idx )
 {
   if ( !pDev || !pHeader || !Recv_Buf )   return HAL_ERROR;
 
-  if ( RxFifo != CAN_RX_FIFO0 && RxFifo != CAN_RX_FIFO1 )   return HAL_ERROR;
+  if ( FIFO_idx != FIFO_IDX_0 && FIFO_idx != FIFO_IDX_1 )   return HAL_ERROR;
 
   bool is_RxITEnb = pDev->CheckInterrupt( pDev, CAN_IT_RX_FIFO0_MSG_PENDING | CAN_IT_RX_FIFO1_MSG_PENDING );
   if ( is_RxITEnb )   return HAL_BUSY;    // 检查中断. 若接收中断开启，则不允许再调用该API.
 
-  return HAL_CAN_GetRxMessage(pDev->canHandle, RxFifo, pHeader, Recv_Buf);
+  uint32_t halFifo = (FIFO_idx == FIFO_IDX_0) ? CAN_RX_FIFO0 : CAN_RX_FIFO1;
+
+  return HAL_CAN_GetRxMessage(pDev->canHandle, halFifo, pHeader, Recv_Buf);
 }
 
 static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_idx )
@@ -1410,7 +1412,7 @@ static HAL_StatusTypeDef Cus_CAN_Recv_IT( Cus_CAN_Device_t *pDev, CAN_RxHeaderTy
   if ( pPrivate->head[FIFO_idx] == pPrivate->tail[FIFO_idx] )
   {
     // 缓冲区为空. 无可接收数据.
-    return HAL_ERROR;
+    return HAL_BUSY;
   }
 
   uint32_t __cu_mask;

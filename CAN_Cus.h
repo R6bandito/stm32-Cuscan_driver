@@ -51,7 +51,7 @@
       #include "cmsis_os2.h"
       #include "Cus_CAN_RTOS.h"
     #elif (USE_RTOS && !CUS_CAN_RTOS_CMSIS)
-      #warning " If you need to use USE_DEFAULT_RxFIFO_FULL_HOOK. Plz make sure that  "
+      #warning "USE_DEFAULT_RxFIFO_FULL_HOOK requires overriding Cus_CAN_BackupNotifyFromISR() when CUS_CAN_RTOS_CMSIS is 0. Otherwise, buffer overflow will be silently ignored!"
     #endif
 
     #if (USE_RTOS)
@@ -255,7 +255,7 @@ struct Cus_CAN_Device
     HAL_StatusTypeDef (*Send_IT)( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
   #endif 
 
-  HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint32_t RxFifo );
+  HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_idx );
   HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_Idx );
   HAL_StatusTypeDef (*EnableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
   HAL_StatusTypeDef (*DisableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );

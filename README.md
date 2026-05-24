@@ -1,6 +1,14 @@
 # Cus_CAN – 通用 STM32 CAN 驱动库
 
-[TOC]
+- [Cus_CAN – 通用 STM32 CAN 驱动库](#cus-can------stm32-can----)
+  * [仓库概述](#----)
+  * [项目特性](#----)
+  * [文件结构](#----)
+  * [快速开始](#----)
+  * [核心配置宏](#-----)
+    + [功能配置](#----)
+    + [宏定义](#---)
+  * [API Reference](#api-reference)
 
 ------
 
@@ -183,16 +191,17 @@ Cus_CAN/
 ### 功能配置
 
 |             宏名称             |                             描述                             | 默认值 |
-| :----------------------------: | :----------------------------------------------------------: | ------ |
-|  USE_DEFAULT_RxFIFO_FULL_HOOK  | 选择是否开启由本库默认提供的缓冲区溢出备份机制.0=不使用，1=使用.关闭该宏后将不启用相关API以及不编译相关代码。关闭状态下用户可自行重写Hook来自定义溢出后处理机制。 | 0      |
-|    BACKUP_BUFFER_LIMIT_NUM     | 这是一个子级宏，在USE_DEFAULT_RxFIFO_FULL_HOOK该宏开启的情况下有效，用于限制用户注册的备份缓冲区数目。设置该数目会影响对应处理机制的响应速度(更多的遍历)，以及增加RAM的占用，建议保持默认值。 | 2      |
-|     CAN_CFG_ALLOC_DYNAMIC      | bxCAN硬件配置相关结构体是否采用动态内存分配. 0=静态分配，1=动态分配.一般情况下建议保持默认值. | 0      |
-|     CAN_TCB_ALLOC_DYNAMIC      | CusCAN库内部靠维护实例控制块进行工作.该选项用于决定任务控制块是否通过动态方式进行分配. 0=静态分配，1=动态分配. 建议保持默认值. | 0      |
-|         USE_SEND_ASYNC         | 是否启用 异步发送模式 (非阻塞). 0=不启用，1=启用. 默认为0(使用阻塞发送模式，提交发送请求后，成功收到TXOK方才返回). 根据实际需求进行修改. | 0      |
-|  SEND_ASYNC_NodePOLL_DYNAMIC   | 这是一个子级宏，在USE_SEND_ASYNC开启的情况下有效. 用于选择发送队列的节点来源于动态分配还是静态分配. 0=静态分配，1=动态分配(当前版本待实现). 建议使用默认值并在上层采用失败重试机制. | 0      |
-|         USE_CUS_CANTP          | 是否启用配套的Cus_CANTP库. 本库内部封装了一个发送API供Cus_CANTP使用，并且配套的Cus_CAN_IT.c机制中将会开启CANTP通路.  0=不启用，1=启用. 根据实际需求修改(本库不包含CANTP核心代码，详见 Cus_CANTP 库) | 0      |
-|            USE_RTOS            | 是否启用 RTOS 适配模式. 若运行在 RTOS 环境中请将其开启，并按照文件中指导进行对应的移植操作. 0=裸机环境，1=RTOS环境. | 0      |
-| Cus_SYSCALL_INTERRUPT_PRIORITY | 这是一个子级宏，在USE_RTOS开启的情况下有效.用于获取当前操作系统所管理的中断最大优先级，为库中临界区管理部分使用. 请根据使用的操作系统来正确设置. | N/A    |
+| :----------------------------: | :----------------------------------------------------------: | :----: |
+|  USE_DEFAULT_RxFIFO_FULL_HOOK  | 选择是否开启由本库默认提供的缓冲区溢出备份机制.0=不使用，1=使用.关闭该宏后将不启用相关API以及不编译相关代码。关闭状态下用户可自行重写Hook来自定义溢出后处理机制。 |   0    |
+|    BACKUP_BUFFER_LIMIT_NUM     | 这是一个子级宏，在USE_DEFAULT_RxFIFO_FULL_HOOK该宏开启的情况下有效，用于限制用户注册的备份缓冲区数目。设置该数目会影响对应处理机制的响应速度(更多的遍历)，以及增加RAM的占用，建议保持默认值。 |   2    |
+|     CAN_CFG_ALLOC_DYNAMIC      | bxCAN硬件配置相关结构体是否采用动态内存分配. 0=静态分配，1=动态分配.一般情况下建议保持默认值. |   0    |
+|     CAN_TCB_ALLOC_DYNAMIC      | CusCAN库内部靠维护实例控制块进行工作.该选项用于决定任务控制块是否通过动态方式进行分配. 0=静态分配，1=动态分配. 建议保持默认值. |   0    |
+|         USE_SEND_ASYNC         | 是否启用 异步发送模式 (非阻塞). 0=不启用，1=启用. 默认为0(使用阻塞发送模式，提交发送请求后，成功收到TXOK方才返回). 根据实际需求进行修改. |   0    |
+|  SEND_ASYNC_NodePOLL_DYNAMIC   | 这是一个子级宏，在USE_SEND_ASYNC开启的情况下有效. 用于选择发送队列的节点来源于动态分配还是静态分配. 0=静态分配，1=动态分配(当前版本待实现). 建议使用默认值并在上层采用失败重试机制. |   0    |
+|         USE_CUS_CANTP          | 是否启用配套的Cus_CANTP库. 本库内部封装了一个发送API供Cus_CANTP使用，并且配套的Cus_CAN_IT.c机制中将会开启CANTP通路.  0=不启用，1=启用. 根据实际需求修改(本库不包含CANTP核心代码，详见 Cus_CANTP 库) |   0    |
+|            USE_RTOS            | 是否启用 RTOS 适配模式. 若运行在 RTOS 环境中请将其开启，并按照文件中指导进行对应的移植操作. 0=裸机环境，1=RTOS环境. |   0    |
+|       CUS_CAN_RTOS_CMSIS       | 这是一个子级宏，仅在USE_RTOS启用的情况下有效。该宏用于表示用户所使用的RTOS是否经过CMSIS-RTOS抽象层的处理。若为CMSIS-RTOS则自动在当前路径中包含相关头文件，并对应启动备份缓冲区机制的RTOS形式(如果启用USE_DEFAULT_RxFIFO_FULL_HOOK)。0=用户自实现, 1=CMSIS-RTOS2 内置。注意：若设置为0且启用了USE_DEFAULT_RxFIFO_FULL_HOOK，则用户需要手动在上层重写__weak void Cus_CAN_BackupNotifyFromISR( void )实现自己的通知与处理逻辑，否则缓冲区满后将静默返回，可能丢失整个缓冲区数据！ |   1    |
+| Cus_SYSCALL_INTERRUPT_PRIORITY | 这是一个子级宏，在USE_RTOS开启的情况下有效.用于获取当前操作系统所管理的中断最大优先级，为库中临界区管理部分使用. 请根据使用的操作系统按照.h文件中的示例来正确定义设置. |   5    |
 
 ------
 
@@ -239,20 +248,22 @@ __weak HAL_StatusTypeDef Cus_CAN_QuickSetup( CAN_TypeDef *instance, const Cus_CA
 
 ​	该API用于一键启动CAN通信（初始化CAN + 全通过滤器 + CAN启动），多用于快速组建通信环境以及通信测试。内部会自动使用一组通用的默认配置对用户所传入的CAN实例进行功能配置。默认配置如下：
 
-> Baudrate = 500K
-> AutoBusOff = false
-> AutoRestransmission = false
-> AutoWakeUP = false
-> ReceiveFifoLocked = false
-> TimeTriggeredMode = false
-> TransmitFifoPriority = false
-> SJW = 1Tq
->
-> FIFO = FIFO0
-> FilterBank = 0
-> ID(High/Low/MaskHigh/MaskLow) = 0
-> Mode = IDMask
-> Scale = 32Bit
+```
+Baudrate = 500K
+AutoBusOff = false
+AutoRestransmission = false
+AutoWakeUP = false
+ReceiveFifoLocked = false
+TimeTriggeredMode = false
+TransmitFifoPriority = false
+SJW = 1Tq
+
+FIFO = FIFO0
+FilterBank = 0
+ID(High/Low/MaskHigh/MaskLow) = 0
+Mode = IDMask
+Scale = 32Bit
+```
 
 **注意事项**：
 
@@ -359,6 +370,166 @@ void Cus_CAN_DeviceClose( Cus_CAN_Device_t **pDev );
 
 - 动态分配：底层调用free释放由malloc分配的空间。并将传入的 pDev 置为 NULL。
 - 静态分配：清空对应内存区的字段。
+
+------
+
+- **获取实例控制块**
+
+```c
+Cus_CAN_Device_t *Cus_CAN_getControlBlock( CAN_TypeDef *instance );
+```
+
+**参数**：
+
+- `CAN_TypeDef *instance`：对应控制块的CAN实例。需要获取哪一个控制块就传入对应CAN实例。
+
+**返回值**：
+
+- `=NULL`：传入实例无效/传入实例与配置不符（例如MAX_SUPPORT_CANDEV = 1，传入CAN2_INDEX）/传入实例未经CusCAN库初始化。
+- `!=NULL`：成功获取对应CAN实例的设备指针对象，可通过该指针进行发送/接收等操作。
+
+**描述**：
+
+​	返回经由CusCAN初始化的对应CAN实例的指针，用于操控实例进行发送/接收/开关中断/缓冲区注册等操作。
+
+注意事项：
+
+1.返回的虽是非Const类型指针，但是随意修改该指针指向的任何成员都有可能导致状态异常，进而可能造成后续工作状态异常。因此不要手动修改任何成员。
+2.传入的CAN实例必须由CusCAN库进行初始化，否则在CusCAN库中无该设备对应的信息。这种情况将返回NULL。
+
+--------------------  初始化与生命周期管理 --------------------
+
+------
+
+---------------------------  发送 & 接收 ----------------------------
+
+- **阻塞式发送**
+
+```c
+HAL_StatusTypeDef (*Send)( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
+
+// 该函数为设备指针内部的回调函数. pDev -> Send( .... )
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `CAN_TxHeaderTypeDef Txheader`：报文发送头。来源于HAL库，标识该帧报文的详细信息。
+- `uint8_t *Send_Buf`：所要发送的数据缓冲区。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数非法/**使能了发送完成中断**/发送请求提交失败/发送邮箱检测错误(通常不会有该情况)。
+- `HAL_TIMEOUT`：报文请求提交后未能在规定时间内检测到TXOK发送完成标志位。
+- `HAL_OK`：该次发送完成。
+
+**描述**：
+
+​	该API为单帧报文发送基础方法，采用**阻塞式发送**机制，直到检测到发送完成标志位置位方返回HAL_OK。
+
+**注意事项**：
+
+1.**该方法仅限于未开启Tx中断时调用**，若开启了Tx中断再调用该方法则会提前返回HAL_ERROR。防止Tx提前清标志而导致该方法中轮询不到标志位，进而错误触发超时。
+
+2.该方法内部时基依赖于 HAL 库中的 uwTick。因此若运行在 RTOS 环境下，**务必保证 uwTick 能正常被更新**，否则将会锁死。
+
+------
+
+- **异步发送（非阻塞）**
+
+```c
+HAL_StatusTypeDef (*Send_IT)( Cus_CAN_Device_t *pDev, CAN_TxHeaderTypeDef Txheader, uint8_t *Send_Buf );
+
+// 该函数为设备指针内部的回调函数. pDev -> Send_IT( .... )
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `CAN_TxHeaderTypeDef Txheader`：报文发送头。来源于HAL库，标识该帧报文的详细信息。
+- `uint8_t *Send_Buf`：所要发送的数据缓冲区。
+
+**返回值**：
+
+- `HAL_ERROR`：参数非法/发送请求提交失败（例如发送邮箱已满）。
+- `HAL_BUSY`：节点分配失败，队列内存池中无多余空闲节点。
+- `HAL_OK`：成功提交发送请求/成功将待发送报文挂入发送队列。
+
+**描述**：
+
+​	该 API 为非阻塞式报文发送方法，无论是否成功将立即返回，不会进行阻塞。**内部每个CAN实例分别维护一个发送队列，多个CAN实例共享一个节点池**。请求发起且硬件正忙时将会从空闲节点池中取出一个节点，填充后排入发送队列等待发送。发送队列的状态推进依靠发送中断完成。
+
+**注意事项**：
+
+1.函数内部已有临界段保护，上层无需额外保护。
+2.该方法使用的前提是在头文件中开启 `USE_SEND_ASYNC`。
+3.该方法需要开启发送中断，否则将无法推进状态机。
+4.节点池大小由宏 `TX_NODE_POLL_SIZE` 定义，默认 8。当发送请求速率超过硬件发送能力时，队列会满，返回 `HAL_BUSY`，用户应实现重试或丢帧策略。
+
+------
+
+- **轮询接收**
+
+```c
+HAL_StatusTypeDef (*Receive)( const Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_idx );
+
+// 该函数为设备指针内部的回调函数. pDev -> Receive( ..... )
+```
+
+**参数**：
+
+- `const Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `CAN_RxHeaderTypeDef *pHeader`：报文信息头(接收)。接收到的报文元信息将会放入该变量中。
+- `uint8_t *Recv_Buf`：数据接收缓冲区。
+- `uint8_t FIFO_idx`：要轮询读取的 FIFO。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数非法/ 底层 `HAL_CAN_GetRxMessage` 返回错误。 
+- `HAL_BUSY`：检测到接收中断开启，禁用该API，返回BUSY，以防止中断与轮询冲突。
+- `HAL_OK`：`HAL_CAN_GetRxMessage`返回OK（接收到报文）。
+
+**描述**：
+
+​	该方法用于手动轮询接收CAN报文。当关闭所有高级功能且不使用Tx与Rx中断时，该库将最简且退化为对HAL的基础封装。
+
+**注意事项**：
+
+1.传入的FIFO_idx参数为CusCAN驱动库中定义的宏参数（例如 `FIFO_IDX_0` 或 `FIFO_IDX_1`），不应传入HAL库定义的FIFO宏，否则提前返回HAL_ERROR。
+2.使用该函数的前提是不能使能Rx中断，否则提前返回HAL_BUSY。
+
+------
+
+- **缓冲区接收**
+
+```c
+HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pHeader, uint8_t *Recv_Buf, uint8_t FIFO_Idx );
+
+// 该函数为设备指针内部的回调函数. pDev -> Receive_IT( .... )
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `CAN_RxHeaderTypeDef *pHeader`：报文信息头(接收)。接收到的报文元信息将会放入该变量中。
+- `uint8_t *Recv_Buf`：数据接收缓冲区。
+- `uint8_t FIFO_Idx`：要读取的 FIFO。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数非法/未开对应中断/缓冲区未注册。
+- `HAL_BUSY`：资源当前不可用（缓冲区为空）。
+- `HAL_OK`：成功从缓冲区中取出一帧数据。
+
+**描述**：
+
+​	该API用于从内部维护的环形缓冲区中取出一帧CAN报文。具体设计信息详见下文。
+
+**注意事项**：
+
+1.使用该API需要开启Rx中断，否则提前返回HAL_ERROR。
+2.用户应该在开始CAN通信之前注册缓冲区。调用该API时，若缓冲区未注册则提前返回HAL_ERROR。
+3.内部已有临界段保护，无需上层额外保护。
 
 ------
 
