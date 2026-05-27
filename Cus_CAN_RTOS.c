@@ -3,7 +3,7 @@
 #include "cmsis_os2.h"
 
 
-#if (USE_DEFAULT_RxFIFO_FULL_HOOK && USE_RTOS && CUS_CAN_RTOS_CMSIS)
+#if (USE_DEFAULT_RxFIFO_FULL_HOOK && CUS_USE_RTOS && CUS_CAN_RTOS_CMSIS)
   static osThreadAttr_t fifoFullThreadAttr;
   static osThreadId_t fifoFullThreadID;
 

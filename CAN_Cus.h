@@ -35,26 +35,26 @@
   #define CAN_CFG_ALLOC_DYNAMIC           (0)     // 配置相关结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
   #define CAN_TCB_ALLOC_DYNAMIC           (0)     // 设备结构体内存分配方式: 0=静态分配(默认), 1=动态分配.
 
-  #define USE_SEND_ASYNC                  (0)     // 是否启用异步发送: 0=不启用异步发送(发送为阻塞式). 1=启用异步发送(添加异步发送API).
+  #define USE_SEND_ASYNC                  (1)     // 是否启用异步发送: 0=不启用异步发送(发送为阻塞式). 1=启用异步发送(添加异步发送API).
     #if (USE_SEND_ASYNC)
       #define SEND_ASYNC_NodePOLL_DYNAMIC (0)     // 发送队列节点池内存分配方式: 0=静态分配(默认). 1=动态分配(待实现).
     #endif // USE_SEND_ASYNC
 
-  #define USE_CUS_CANTP                   (0)     // 是否使用CANTP桥接层: 0=不使用(默认). 1=使用Cus_CANTP库.(注：启动该宏后上层不需要再手动Include CANTP.h!)
+  #define USE_CUS_CANTP                   (1)     // 是否使用CANTP桥接层: 0=不使用(默认). 1=使用Cus_CANTP库.(注：启动该宏后上层不需要再手动Include CANTP.h!)
     #if (USE_CUS_CANTP)
       #include "Cus_CANTP.h"
     #endif 
 
-  #define USE_RTOS                        (0)     // 是否使用OS版本: 0=不使用(默认). 1=使用OS.
-    #define CUS_CAN_RTOS_CMSIS            (1)     // 0=用户自实现, 1=CMSIS-RTOS2 内置.
-    #if (USE_RTOS && CUS_CAN_RTOS_CMSIS)
+  #define CUS_USE_RTOS                    (0)     // 是否使用OS版本: 0=不使用(默认). 1=使用OS.
+    #define CUS_CAN_RTOS_CMSIS            (0)     // 0=用户自实现, 1=CMSIS-RTOS2 内置.
+    #if (CUS_USE_RTOS && CUS_CAN_RTOS_CMSIS)
       #include "cmsis_os2.h"
       #include "Cus_CAN_RTOS.h"
-    #elif (USE_RTOS && !CUS_CAN_RTOS_CMSIS)
+    #elif (CUS_USE_RTOS && !CUS_CAN_RTOS_CMSIS)
       #warning "USE_DEFAULT_RxFIFO_FULL_HOOK requires overriding Cus_CAN_BackupNotifyFromISR() when CUS_CAN_RTOS_CMSIS is 0. Otherwise, buffer overflow will be silently ignored!"
     #endif
 
-    #if (USE_RTOS)
+    #if (CUS_USE_RTOS)
       /* 
         请根据所使用的操作系统. 将对应的操作系统所能管理的中断最大优先级数值或宏定义贴于下方. 
       */
@@ -69,18 +69,18 @@
 
 
     /* 若 CUS_CAN_RTOS_CMSIS = 0 && USE_RTOS == 1. 请务必在你的应用逻辑中重写该方法.否则若开启USE_DEFAULT_RxFIFO_FULL_HOOK. 缓冲区溢出后将会静默返回 */
-    /* 具体实现为发一个通知到你的处理函数中，并调用 Cus_CAN_ProcessBackupBuffers() */
+    /* 具体实现为发一个通知到你的处理函数中，并在你的处理逻辑中调用 Cus_CAN_ProcessBackupBuffers() */
     __weak void Cus_CAN_BackupNotifyFromISR( void );
 /* ************************************************* */
 
 
-#if (USE_RTOS)
+#if (CUS_USE_RTOS)
   #define Cus_CAN_ENTER_CRITICAL()               do { __cu_mask = __get_BASEPRI(); \
                                                       __set_BASEPRI(Cus_SYSCALL_INTERRUPT_PRIORITY << (8 - __NVIC_PRIO_BITS)); \
                                                     } while(0)
                                                 
   #define Cus_CAN_EXIT_CRITICAL()                do { __set_BASEPRI(__cu_mask); } while(0)
-#elif (!USE_RTOS)
+#elif (!CUS_USE_RTOS)
   #define Cus_CAN_ENTER_CRITICAL()              do {  \
                                                       __cu_mask = __get_PRIMASK();  \
                                                       __disable_irq();               \
@@ -98,6 +98,11 @@
   #define MAX_SUPPORT_RXFIFO             (2)
     #define FIFO_IDX_0             (0)
     #define FIFO_IDX_1             (1)
+
+  #define CUS_CAN_IRQ_PRIO_RX0     (6)    /* FIFO0 接收中断优先级 */
+  #define CUS_CAN_IRQ_PRIO_RX1     (6)    /* FIFO1 接收中断优先级 */
+  #define CUS_CAN_IRQ_PRIO_TX      (6)    /* 发送完成中断优先级 */
+  #define CUS_CAN_IRQ_PRIO_SCE     (6)    /* 错误/状态变化中断优先级 */
 
   #define CAN_FILTER_RTR_NONE            (0)
   #define CAN_FILTER_RTR_ID1             (1UL << 0)
@@ -268,7 +273,7 @@ struct Cus_CAN_Device
     bool is_RingFIFO_Full;                    // 缓冲区溢出标志.
     uint8_t (*registerBackUPBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );    // 备份缓冲区注册API.
     void (*BackupBufferHook)( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx,
-                                  Cus_CAN_RxMsg_t *pData, uint16_t head, uint16_t tail );       // 备份机制用户回调Hook.
+                                  Cus_CAN_RxMsg_t *pData, uint16_t head, uint16_t tail, uint16_t maxMsgNum );       // 备份机制用户回调Hook.
   #endif // USE_DEFAULT_RxFIFO_FULL_HOOK
 };
 

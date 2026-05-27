@@ -37,9 +37,10 @@ typedef struct Cus_Private
     uint32_t backupBuf_size[BACKUP_BUFFER_LIMIT_NUM];   // 记录每个新缓冲区大小.
     uint32_t backupBuf_Bitmap;                          // 32位位图(为0则表示该缓冲区正被使用. 为1则表示空闲可用).
 
-    uint16_t backup_head[BACKUP_BUFFER_LIMIT_NUM];      // head备份
-    uint16_t backup_tail[BACKUP_BUFFER_LIMIT_NUM];      // tail备份
-    uint8_t backup_fifo_source[BACKUP_BUFFER_LIMIT_NUM];  // 记录每个槽来自哪个 FIFO
+    uint16_t backup_head[BACKUP_BUFFER_LIMIT_NUM];      // head备份.
+    uint16_t backup_tail[BACKUP_BUFFER_LIMIT_NUM];      // tail备份.
+    uint8_t backup_fifo_source[BACKUP_BUFFER_LIMIT_NUM];  // 记录每个槽来自哪个 FIFO.
+    uint16_t backup_maxMsgNum[BACKUP_BUFFER_LIMIT_NUM];   // 溢出时原始缓冲区的帧容量.
   #endif 
 
   #if (USE_SEND_ASYNC)
@@ -513,6 +514,7 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
         pPriv->backup_head[i] = 0;
         pPriv->backup_tail[i] = 0;
         pPriv->backup_fifo_source[i] = FIFO_IDX_0;
+        pPriv->backup_maxMsgNum[i] = 0;
       }
 
       pPriv->backupBuf_Valid = 0;
@@ -526,7 +528,7 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
       Cus_CAN_NodePollInit(*pDevice);     // 若开启异步发送. 则于此处进行初始化.
     #endif 
 
-    #if (USE_RTOS && CUS_CAN_RTOS_CMSIS && USE_DEFAULT_RxFIFO_FULL_HOOK)
+    #if (CUS_USE_RTOS && CUS_CAN_RTOS_CMSIS && USE_DEFAULT_RxFIFO_FULL_HOOK)
       static uint8_t Guard = 0;
       if ( !Guard )
       {
@@ -595,6 +597,7 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
         pPrivate->backup_head[i] = 0;
         pPrivate->backup_tail[i] = 0;
         pPrivate->backup_fifo_source[i] = FIFO_IDX_0;
+        pPrivate->backup_maxMsgNum[i] = 0;
       }
 
       pPrivate->backupBuf_Valid = 0;
@@ -607,7 +610,7 @@ static HAL_StatusTypeDef cus_canfilterInit( const CANFilterConfig_t * pConf_Stru
       Cus_CAN_NodePollInit(*pDevice);     // 若开启异步发送. 则于此处进行初始化.
     #endif 
 
-    #if (USE_RTOS && CUS_CAN_RTOS_CMSIS && USE_DEFAULT_RxFIFO_FULL_HOOK)
+    #if (CUS_USE_RTOS && CUS_CAN_RTOS_CMSIS && USE_DEFAULT_RxFIFO_FULL_HOOK)
       static uint8_t Guard = 0;
       if ( !Guard )
       {
@@ -876,8 +879,6 @@ static HAL_StatusTypeDef Cus_CAN_EnbIT( Cus_CAN_Device_t *pDev, uint32_t interru
     HAL_StatusTypeDef hReturn = Cus_CAN_Start(pDev->Instance);
     if ( hReturn != HAL_OK )
     {
-      Cus_CANStartFailed_Hook(pDev->canHandle, hReturn);
-
       return HAL_TIMEOUT;
     }
   }
@@ -949,13 +950,9 @@ static HAL_StatusTypeDef Cus_CAN_DisableIT( Cus_CAN_Device_t *pDev, uint32_t int
  *
  * @warning 不建议手动调用此函数，因为驱动会在合适的时机自动调用它.
  * 
- * @warning 如果同时使用 FIFO0 和 FIFO1 的中断，必须为这两个中断设置相同的优先级，
- *          否则可能会导致环形缓冲区数据错乱。默认实现中两者均为优先级 5，更改时请格外注意.
  */
 __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
 {
-  #warning "Ensure RX0 and RX1 interrupts have same priority to avoid ring buffer corruption."
-
   if ( !pDev || !pDev->canHandle )  return;
 
   if ( pDev->Instance == CAN1 )
@@ -966,7 +963,7 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
     bool is_RecvRx0OverRun_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO0_OVERRUN);
     if ( is_RecvRx0_IT || is_RecvRx0Full_IT || is_RecvRx0OverRun_IT )
     {
-      HAL_NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, 6, 0);
+      HAL_NVIC_SetPriority(USB_LP_CAN1_RX0_IRQn, CUS_CAN_IRQ_PRIO_RX0, 0);
       HAL_NVIC_EnableIRQ(USB_LP_CAN1_RX0_IRQn);
     }
 
@@ -975,14 +972,14 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
     bool is_RecvRx1OverRun_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_RX_FIFO1_OVERRUN);
     if ( is_RecvRx1_IT || is_RecvRx1Full_IT || is_RecvRx1OverRun_IT )
     {
-      HAL_NVIC_SetPriority(CAN1_RX1_IRQn, 6, 0);
+      HAL_NVIC_SetPriority(CAN1_RX1_IRQn, CUS_CAN_IRQ_PRIO_RX1, 0);
       HAL_NVIC_EnableIRQ(CAN1_RX1_IRQn);
     }
 
     bool is_TxMailBoxCplt_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_TX_MAILBOX_EMPTY);
     if ( is_TxMailBoxCplt_IT )
     {
-      HAL_NVIC_SetPriority(USB_HP_CAN1_TX_IRQn, 6, 0);
+      HAL_NVIC_SetPriority(USB_HP_CAN1_TX_IRQn, CUS_CAN_IRQ_PRIO_TX, 0);
       HAL_NVIC_EnableIRQ(USB_HP_CAN1_TX_IRQn);
     }
 
@@ -993,7 +990,7 @@ __attribute__((used)) __weak void Cus_CAN_NVIC_Config( Cus_CAN_Device_t *pDev )
     bool is_Error_Busoff_IT = pDev->CheckInterrupt((const Cus_CAN_Device_t *)pDev, CAN_IT_BUSOFF);
     if ( is_Error_WakeUP_IT || is_Error_IT || is_Error_Sleep_IT || is_Error_Passive_IT || is_Error_Busoff_IT )
     {
-      HAL_NVIC_SetPriority(CAN1_SCE_IRQn, 5, 0);
+      HAL_NVIC_SetPriority(CAN1_SCE_IRQn, CUS_CAN_IRQ_PRIO_SCE, 0);
       HAL_NVIC_EnableIRQ(CAN1_SCE_IRQn);
     }
 
@@ -1460,7 +1457,7 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
   }
 
   Cus_CAN_Priv_t *pPrivate = (Cus_CAN_Priv_t *)pDev->private;
-  uint16_t next_head = ( pPrivate->head[FIFO_idx] + 1 ) % pPrivate->max_msgNum[FIFO_idx]; // 计算下一个写入位置.
+  uint16_t next_head = ( pPrivate->head[FIFO_idx] + 1 ) % pPrivate->max_msgNum[FIFO_idx]; // 计算下一个写入位置. 
   if ( next_head == pPrivate->tail[FIFO_idx] )
   {
     #if (!USE_DEFAULT_RxFIFO_FULL_HOOK)
@@ -1603,7 +1600,8 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
               pPrivate->backup_fifo_source[slot], 
               (Cus_CAN_RxMsg_t *)pPrivate->pRingFullBackUP[slot], 
               pPrivate->backup_head[slot], 
-              pPrivate->backup_tail[slot] );
+              pPrivate->backup_tail[slot], 
+              pPrivate->backup_maxMsgNum[slot] );
           }
 
           /* 归还位图. */
@@ -1650,9 +1648,10 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
     /* 指针交换完毕. 位图更新. */
     Private->backupBuf_Bitmap &= ~(0x01 << freeIndex);
 
-    /* 将 旧head tail 保存.并记录溢出FIFO号 */
+    /* 将 旧head tail maxMsg保存.并记录溢出FIFO号 */
     Private->backup_head[freeIndex] = Private->head[FIFO_idx];
     Private->backup_tail[freeIndex] = Private->tail[FIFO_idx];
+    Private->backup_maxMsgNum[freeIndex] = Private->max_msgNum[FIFO_idx];
     Private->backup_fifo_source[freeIndex] = FIFO_idx;
 
     /* 计算当前新换入的缓冲区元数据. */
@@ -1673,7 +1672,7 @@ void Cus_CAN_RingRecvIT( Cus_CAN_Device_t *pDev, uint32_t FIFO )
 
   __weak void Cus_CAN_BackupNotifyFromISR( void )
   {
-    #if (!USE_RTOS)
+    #if (!CUS_USE_RTOS)
       /* 裸机场景. 挂起PendSV. */
       /* 此时. 旧的缓冲区已经被撤下，位图已被更新，新的缓冲区也已被换上继续工作. 挂起PendSV准备后续处理工作. */
       SCB->ICSR |= SCB_ICSR_PENDSVSET_Msk;
