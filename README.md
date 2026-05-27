@@ -207,19 +207,23 @@ Cus_CAN/
 
 ### 宏定义
 
-| 宏名称                             | 描述                                                         | 默认值 |
-| ---------------------------------- | ------------------------------------------------------------ | ------ |
-| MAX_SUPPORT_CANDEV                 | 最大支持 CAN 实例数（CAN1~CAN3）。该值反映的就是该库中CAN实例对象的数目(一个CAN实例对应一个操作对象)。默认为3，若所用控制器并不支持多个CAN(例：STM32F1大部分常规系列)，可以自行减小该值来节省RAM。不建议增大该值（也没有必要增大）。 | 3      |
-| CAN1_INDEX\|CAN2_INDEX\|CAN3_INDEX | CAN 实例在内部数组中的索引。通常情况无需改动。               | 0/1/2  |
-| MAX_SUPPORT_RXFIFO                 | 每个 CAN 实例的 FIFO 数量。请根据底层CAN硬件的具体配置来设置。例如：STM32F103C8T6 的bxCAN硬件有两个FIFO(FIFO0/FIFO1)，则该值设置为2。在资源十分有限的设备上，若你确保在整个通信过程中只使用一个FIFO，也可以将其设置为1以此来节省RAM开销。 | 2      |
-| FIFO0_IDX_0 \| FIFO_IDX_1          | FIFO0/FIFO1 在内部数组中的索引。可按需进行修改。例如：仅使用FIFO1，则可以删除FIFO0_IDX_0，并将FIFO_IDX_1定义为0。后续在对相关API的调用中，FIFO参数传参时传入该宏即可。该宏主要为了API调用传参的可读性而设计。 | 0/1    |
-| TX_NODE_POLL_SIZE                  | 该宏为一个子级宏，仅在USE_SEND_ASYNC有效且SEND_ASYNC_NodePOLL_DYNAMIC(不使用动态分配)无效的情况下有效。反映异步发送队列节点池大小(也可理解为队列长度大小)。在当前默认配置下，异步发送队列最多只允许同时挂起8帧发送请求。超出将返回错误并由上层进行对应处理。 | 8      |
-| CAN_FREE                           | 标记异步队列节点空闲状态（是否可用）。由于设计原因后续将考虑移除相关定义。不要修改。 | -1     |
-| CAN_FILTER_RTR_NONE                | 列表模式：所有 ID 仅收数据帧。                               | 0      |
-| CAN_FILTER_RTR_ID1` ~ `ID4         | 列表模式：对指定 ID 收远程帧。                               | 1<<0~3 |
-| CAN_FILTER_RTR_ALL                 | 列表模式：全部 ID 收远程帧。                                 | 组合值 |
-| CAN_FILTER_MASK_DATA               | 掩码模式：仅收数据帧。                                       | 0xAA   |
-| CAN_FILTER_MASK_REMOTE             | 掩码模式：仅收远程帧。                                       | 0xBB   |
+|               宏名称               |                             描述                             | 默认值 |
+| :--------------------------------: | :----------------------------------------------------------: | :----: |
+|         MAX_SUPPORT_CANDEV         | 最大支持 CAN 实例数（CAN1~CAN3）。该值反映的就是该库中CAN实例对象的数目(一个CAN实例对应一个操作对象)。默认为3，若所用控制器并不支持多个CAN(例：STM32F1大部分常规系列)，可以自行减小该值来节省RAM。不建议增大该值（也没有必要增大）。 |   3    |
+| CAN1_INDEX\|CAN2_INDEX\|CAN3_INDEX |        CAN 实例在内部数组中的索引。通常情况无需改动。        | 0/1/2  |
+|         MAX_SUPPORT_RXFIFO         | 每个 CAN 实例的 FIFO 数量。请根据底层CAN硬件的具体配置来设置。例如：STM32F103C8T6 的bxCAN硬件有两个FIFO(FIFO0/FIFO1)，则该值设置为2。在资源十分有限的设备上，若你确保在整个通信过程中只使用一个FIFO，也可以将其设置为1以此来节省RAM开销。 |   2    |
+|     FIFO0_IDX_0 \| FIFO_IDX_1      | FIFO0/FIFO1 在内部数组中的索引。可按需进行修改。例如：仅使用FIFO1，则可以删除FIFO0_IDX_0，并将FIFO_IDX_1定义为0。后续在对相关API的调用中，FIFO参数传参时传入该宏即可。该宏主要为了API调用传参的可读性而设计。 |  0/1   |
+|        CUS_CAN_IRQ_PRIO_RX0        |   FIFO0 接收中断优先级。用于EnableIT时自动配置NVIC。下同。   |   6    |
+|        CUS_CAN_IRQ_PRIO_RX1        |                    FIFO1 接收中断优先级。                    |   6    |
+|        CUS_CAN_IRQ_PRIO_TX         |                     发送完成中断优先级。                     |   6    |
+|        CUS_CAN_IRQ_PRIO_SCE        |                   错误/状态变化中断优先级                    |   6    |
+|         TX_NODE_POLL_SIZE          | 该宏为一个子级宏，仅在USE_SEND_ASYNC有效且SEND_ASYNC_NodePOLL_DYNAMIC(不使用动态分配)无效的情况下有效。反映异步发送队列节点池大小(也可理解为队列长度大小)。在当前默认配置下，异步发送队列最多只允许同时挂起8帧发送请求。超出将返回错误并由上层进行对应处理。 |   8    |
+|              CAN_FREE              | 标记异步队列节点空闲状态（是否可用）。由于设计原因后续将考虑移除相关定义。不要修改。 |   -1   |
+|        CAN_FILTER_RTR_NONE         |                列表模式：所有 ID 仅收数据帧。                |   0    |
+|     CAN_FILTER_RTR_ID1` ~ `ID4     |                列表模式：对指定 ID 收远程帧。                | 1<<0~3 |
+|         CAN_FILTER_RTR_ALL         |                 列表模式：全部 ID 收远程帧。                 | 组合值 |
+|        CAN_FILTER_MASK_DATA        |                    掩码模式：仅收数据帧。                    |  0xAA  |
+|       CAN_FILTER_MASK_REMOTE       |                    掩码模式：仅收远程帧。                    |  0xBB  |
 
 ------
 
@@ -527,9 +531,194 @@ HAL_StatusTypeDef (*Receive_IT)( Cus_CAN_Device_t *pDev, CAN_RxHeaderTypeDef *pH
 
 **注意事项**：
 
-1.使用该API需要开启Rx中断，否则提前返回HAL_ERROR。
+1.**使用该API需要开启Rx中断**，否则提前返回HAL_ERROR。
 2.用户应该在开始CAN通信之前注册缓冲区。调用该API时，若缓冲区未注册则提前返回HAL_ERROR。
 3.内部已有临界段保护，无需上层额外保护。
+
+---------------------------  发送 & 接收 ----------------------------
+
+------
+
+---------------------------  缓冲区管理相关 ----------------------------
+
+- **注册接收缓冲区**
+
+```c
+uint8_t (*registerRxBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size, uint8_t FIFO_idx );
+// 该函数为设备指针内部的回调函数. pDev -> registerRxBuffer( .... )
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `void *pBuffer`：需要注册给接收方法使用的缓冲区。（通用指针形式）
+- `uint32_t size`：缓冲区大小。
+- `uint8_t FIFO_idx`：注册的FIFO。缓冲区只注册粒度是针对于一个CAN实例的单个FIFO进行的。若传入为 `FIFO_IDX_0`则为FIFO0注册缓冲区，只存入来自FIFO0的数据。而存入FIFO1的数据由于未注册缓冲区将会返回ERROR。可多次调用该API为该实例的多个FIFO分别创建缓冲区。
+
+**返回值**：
+
+- `0xFF`：传入参数无效（pBuffer为NULL/size > UINT32_MAX/ pDev无效）/ 传入的缓冲区大小小于一个消息元素(`Cus_CAN_RxMsg_t`)
+  意味着连一条信息都无法存入，返回错误。
+- `0`：缓冲区成功注册。
+
+**描述**：
+
+​	该API用于将用户提供的缓冲区注册作为接收环形缓冲区。后续的一系列相关操作（环形缓冲区写入/读出/判满）等均以该缓冲区及其相关元数据为基础。
+
+**注意事项**：
+
+​	1.若使用`Receive_IT`方法，**则必须在收报文之前调用该API为接收机制注册数据缓冲区**！否则数据到来触发中断后无缓冲区可用，会丢掉报文并静默返回。
+
+​	2.接收缓冲区的大小应能够容纳至少一条消息结构(`Cus_CAN_RxMsg_t`)。虽然缓冲区的传入采用`void *`类型通用结构，但是此处建议按照以下格式定义缓冲区后直接注册缓冲区，而不是依赖API内部进行换算（不直观，用户无法准确获知当前传入的缓冲区具体能够存入几条消息）。
+
+```c
+/* 推荐形式  */
+static Cus_CAN_RxMsg_t RecvRingBuf[16];	 // 创建一个最大能容纳15条消息的缓冲区.
+pDev->registerRxBuffer(pDev, (void *)RecvRingBuf, sizeof(RecvRingBuf), FIFO_IDX_0);	// 为FIFO0注册缓冲区.
+
+/* 不推荐形式 */
+static uint8_t RingBuf[128];	// 究竟能存入多少条信息？内部会换算，但是用户层无法感知，进而对性能无法准确把握.
+pDev->registerRxBuffer(pDev, (void *)RingBuf, sizeof(RingBuf), FIFO_IDX_0);
+
+
+/* 附: */
+/* 环形缓冲区元素：一条完整的 CAN 消息 */
+typedef struct 
+{
+  CAN_RxHeaderTypeDef RxHeader;
+  uint8_t RxData[8];
+    
+} Cus_CAN_RxMsg_t;
+```
+
+​	3.该API内部无临界区保护，不可重入。应该在初始化时刻进行注册，且不建议在运行时刻（无论 裸机/RTOS 环境）重新注册先前已被注册过的缓冲区，由于ISR抢占或多线程抢占可能会导致竞争进而出现残缺状态因为潜在问题。
+
+------
+
+- **缓冲区当前时刻报文数目**
+
+```c
+int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_idx );
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `uint8_t FIFO_idx`：所要查询的FIFO编号。（`FIFO_IDX_0`/`FIFO_IDX_1`/你自定义的编号宏）
+
+**返回值**：
+
+- `-1`：传入的pDev无效。
+- `-2`：所选择的FIFO未注册缓冲区。
+- `>0`：缓冲区中当前报文数目。
+
+**描述**：
+
+​	从指定CAN实例的指定FIFO中读出缓冲区中当前（API调用时刻）剩余的报文数目。
+
+**注意事项**：
+
+​	1.所选择的FIFO必须已注册缓冲区，读没有缓冲区的FIFO没有意义，返回错误。
+
+​	2.该API内部有临界段保护，可重入。但是由于读出的数目为瞬时值（仅在当前时刻有效，下一时刻很可能由于另一帧报文的存入或取出而发生改变）因此不建议将该值用于后续逻辑判断。该值推荐的应用方向有：
+--- 手动关闭接收中断时，在Hook回调中指示缓冲区仍有多少数据待处理（允许用户关闭中断后对剩余数据快速处理）
+
+--- Burst大流量冲击统计Pending最大值，用于指示在突发流量冲击时缓冲区溢出风险。
+
+------
+
+- **备份缓冲区注册**
+
+注意：该API仅在开启 `USE_DEFAULT_RxFIFO_FULL_HOOK = 1` 后可用。
+
+```c
+uint8_t (*registerBackUPBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t size );
+// 该函数为设备指针内部的回调函数. pDev -> registerBackUPBuffer( .... )
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `void *pBuffer`：备份缓冲区。
+- `uint32_t size`：备份缓冲区大小。
+
+**返回值**：
+
+- `0xFF`：pDev无效/pBuffer为NULL/缓冲区大小无效(size > UINT32_MAX)/缓冲区注册数量超限。
+- `0`：成功注册备份缓冲区。
+
+**描述**：
+
+​	该API用于在开启由库默认提供的备份功能(`USE_DEFAULT_RxFIFO_FULL_HOOK`)后，注册备用缓冲区。该缓冲区在溢出发生之前将不被使用，当溢出发生后，注册的备份缓冲区将作为替补缓冲区被切换为接收缓冲区进行使用。
+
+**注意事项**：
+
+​	1.该API内部操纵全局数据，且没有临界段保护。如需使用备份机制，应在初始化阶段调用该API注册备份用缓冲区，而不应在任务等有重入风险的地方调用该API。
+
+​	2.备份缓冲区的注册上限取决于 `BACKUP_BUFFER_LIMIT_NUM`。
+
+---------------------------  缓冲区管理相关 ----------------------------
+
+------
+
+---------------------------  中断相关  ----------------------------
+
+- **查询指定中断是否启用**
+
+```c
+bool (*CheckInterrupt)( const Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
+// 该函数为设备指针内部的回调函数. pDev -> CheckInterrupt( .... )
+```
+
+**参数**：
+
+- `const Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
+- `uint32_t interrupt_mask`：中断掩码。用于指定要查询的中断源。该掩码与 HAL 库定义的 CAN 中断标识兼容(例：`CAN_IT_RX_FIFO0_MSG_PENDING`/`CAN_IT_TX_MAILBOX_EMPTY`)。
+
+**返回值**：
+
+- `false`：存在至少一个指定的中断源未使能，或设备无效。
+- `true`：指定的所有中断源均已使能。
+
+**描述**：
+
+​	根据传入的 `interrupt_mask` 参数（支持通过按位 | 进行组合），查询指定一个或多个中断源是否均已开启。
+
+**注意事项**：
+
+​	1.该函数不检查 NVIC 层中断是否开启，仅反映 CAN 控制器内部中断使能状态。
+
+------
+
+- **使能中断**
+
+```c
+HAL_StatusTypeDef (*EnableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
+// 该函数为设备指针内部的回调函数. pDev -> EnableInterrupt( .... )
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息。
+- `uint32_t interrupt_mask`：中断掩码。用于指定要查询的中断源。该掩码与 HAL 库定义的 CAN 中断标识兼容。支持按位或 I  组合多个中断源。
+
+**返回值**：
+
+- `HAL_ERROR`：传入pDev无效/中断使能失败（`HAL_CAN_ActivateNotification`断言失败）。
+- `HAL_TIMEOUT`：使能中断必须在CAN控制器正常启动后进行，API中会对底层CAN控制器是否启动进行检查，若未启动则会调用`Cus_CAN_Start`启动控制器，若启动失败则调用`Cus_CANStartFailed_Hook`后返回 HAL_TIMEOUT状态。
+- `HAL_OK`：成功开启对应中断。
+
+**描述**：
+
+​	根据传入的 `interrupt_mask` 参数（支持通过按位 | 进行组合），开启指定一个或多个中断源。
+
+**注意事项**：
+
+​	1.该API内部在检测到未启动CAN后，会自动调用`Cus_CAN_Start()`。但是请按照标准流程在初始化时于外部显示启动CAN，而不是依赖该API内部启动。
+
+​	2.该API内部在开启中断源后会调用`Cus_CAN_NVIC_Config()`自动配置NVIC，后续无需重复调用相关API开启NVIC。具体配置的优先级由 .h中 `CUS_CAN_IRQ_PRIO_RX0/CUS_CAN_IRQ_PRIO_RX1`等决定，可自行修改。
+
+​	3.若开启了 `USE_SEND_ASYNC`。则开启中断时，如果开启的中断为Tx中断，API内部会检查当前发送队列是否有报文挂起，若有报文挂起，则会调用一次 `Cus_CAN_ProcessTxQueue()`推动队列发送状态机继续发送。
 
 ------
 
