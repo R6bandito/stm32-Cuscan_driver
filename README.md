@@ -553,7 +553,7 @@ uint8_t (*registerRxBuffer)( Cus_CAN_Device_t *pDev, void *pBuffer, uint32_t siz
 - `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息，因此调用时需要传入自身。
 - `void *pBuffer`：需要注册给接收方法使用的缓冲区。（通用指针形式）
 - `uint32_t size`：缓冲区大小。
-- `uint8_t FIFO_idx`：注册的FIFO。缓冲区只注册粒度是针对于一个CAN实例的单个FIFO进行的。若传入为 `FIFO_IDX_0`则为FIFO0注册缓冲区，只存入来自FIFO0的数据。而存入FIFO1的数据由于未注册缓冲区将会返回ERROR。可多次调用该API为该实例的多个FIFO分别创建缓冲区。
+- `uint8_t FIFO_idx`：注册的FIFO。缓冲区注册粒度是针对于一个CAN实例的单个FIFO进行的。若传入为 `FIFO_IDX_0`则为FIFO0注册缓冲区，只存入来自FIFO0的数据。而存入FIFO1的数据由于未注册缓冲区将会返回ERROR。可多次调用该API为该实例的多个FIFO分别创建缓冲区。
 
 **返回值**：
 
@@ -591,7 +591,7 @@ typedef struct
 } Cus_CAN_RxMsg_t;
 ```
 
-​	3.该API内部无临界区保护，不可重入。应该在初始化时刻进行注册，且不建议在运行时刻（无论 裸机/RTOS 环境）重新注册先前已被注册过的缓冲区，由于ISR抢占或多线程抢占可能会导致竞争进而出现残缺状态因为潜在问题。
+​	3.该API内部无临界区保护，不可重入。应该在初始化时刻进行注册，且不建议在运行时刻（无论 裸机/RTOS 环境）重新注册先前已被注册过的缓冲区，由于ISR抢占或多线程抢占可能会导致竞争进而出现残缺状态引发潜在问题。
 
 ------
 
@@ -621,6 +621,7 @@ int16_t Cus_CAN_GetRxBufferPendingCount( Cus_CAN_Device_t *pDev, uint8_t FIFO_id
 ​	1.所选择的FIFO必须已注册缓冲区，读没有缓冲区的FIFO没有意义，返回错误。
 
 ​	2.该API内部有临界段保护，可重入。但是由于读出的数目为瞬时值（仅在当前时刻有效，下一时刻很可能由于另一帧报文的存入或取出而发生改变）因此不建议将该值用于后续逻辑判断。该值推荐的应用方向有：
+
 --- 手动关闭接收中断时，在Hook回调中指示缓冲区仍有多少数据待处理（允许用户关闭中断后对剩余数据快速处理）
 
 --- Burst大流量冲击统计Pending最大值，用于指示在突发流量冲击时缓冲区溢出风险。
@@ -719,6 +720,107 @@ HAL_StatusTypeDef (*EnableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt
 ​	2.该API内部在开启中断源后会调用`Cus_CAN_NVIC_Config()`自动配置NVIC，后续无需重复调用相关API开启NVIC。具体配置的优先级由 .h中 `CUS_CAN_IRQ_PRIO_RX0/CUS_CAN_IRQ_PRIO_RX1`等决定，可自行修改。
 
 ​	3.若开启了 `USE_SEND_ASYNC`。则开启中断时，如果开启的中断为Tx中断，API内部会检查当前发送队列是否有报文挂起，若有报文挂起，则会调用一次 `Cus_CAN_ProcessTxQueue()`推动队列发送状态机继续发送。
+
+------
+
+- **失能中断**
+
+```c
+HAL_StatusTypeDef (*DisableInterrupt)( Cus_CAN_Device_t *pDev, uint32_t interrupt_mask );
+// 该函数为设备指针内部的回调函数. pDev -> DisableInterrupt( .... )
+```
+
+**参数**：
+
+- `Cus_CAN_Device_t *pDev`：所用设备控制块指针。控制块内部蕴含了Instance与Handle等信息。
+- `uint32_t interrupt_mask`：中断掩码。用于指定要关闭的中断源。该掩码与 HAL 库定义的 CAN 中断标识兼容。支持按位或 I  组合多个中断源。
+
+**返回值**：
+
+- `HAL_ERROR`：传入参数无效/底层HAL关闭通知无效(`HAL_CAN_DeactivateNotification`断言失败)。
+- `HAL_OK`：目标中断调用该API前已被关闭，空调用/成功失能对应中断。
+
+**描述**：
+
+​	根据传入的 `interrupt_mask` 参数（支持通过按位 | 进行组合），失能指定一个或多个中断源。
+
+**注意事项**：
+
+​	1.重复调用该API失能同一中断不会返回错误。后续调用均属于空调用。
+
+​	2.当挂起的中断为RX接收中断时(FIFO0/FIFO1)，内部会检查对应的FIFO缓冲区是否仍有剩余数据，**若有剩余数据则调用`Cus_CAN_OnDisableRxIT_NonEmpty`回调来通知用户进行处理**。该回调默认空实现，若无需接收通知，也可以选择不实现该回调，而由自身进行对应处理。
+
+---------------------------  中断相关  ----------------------------
+
+------
+
+---------------------------  过滤器ID快捷配置  ----------------------------
+
+**Ps:以下函数用于填充 `CANFilterConfig_t` 结构体的 `IdHigh`/`IdLow`/`MaskIdHigh`/`MaskIdLow` 字段，简化 ID 和掩码的偏移计算。调用前需自行设置 `FilterBank`、`Mode`、`Scale`、`FIFOAssignment`、`is_Activation` 等成员。**
+
+- **过滤器32位标准列表模式**
+
+```c
+void Cus_CAN_Filter_SetStdList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2 );
+```
+
+**参数**：
+
+- `CANFilterConfig_t *pFilter`：指向过滤器配置结构体的指针。
+-  `uint8_t Filter_RTR`：RTR 控制位掩码，低 2 位分别对应 `id1` 和 `id2`（bit0=id1，bit1=id2）。0=数据帧，1=远程帧。可使用 `CAN_FILTER_RTR_ID1` / `CAN_FILTER_RTR_ID2` 组合。表示该id对应的报文帧允许的通过类型。
+- `uint16_t id1/uint16_t id2`：两个标准ID。（标准模式下 ID范围 0~0x7FF）
+
+**返回值**： 无
+
+**描述**：配置 32 位列表模式过滤器，接收两个标准 ID（11 位）。
+
+**注意事项**：
+
+​	1.对于Std**标准模式，传入的ID必须严格小于7FF**(11位)，否则空调用。
+
+​	2.此类方法仅填充 ID 字段，不修改 `Mode`、`Scale` 等。过滤器模式需预先设为 `Cus_CAN_FILTERMODE_IDLIST/Cus_CAN_FILTERMODE_IDMASK`，尺度为 `Cus_CAN_SCALE_32BIT/Cus_CAN_SCALE_16BIT`。下同，一定要注意！
+
+------
+
+- **过滤器16位标准列表模式**
+
+```c
+void Cus_CAN_Filter_SetStdList16( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint16_t id1, uint16_t id2, uint16_t id3, uint16_t id4 );
+```
+
+该方法及其以下相关方法参数都是与上文相同的，此处为了篇幅考虑不做赘述参数。
+
+**描述**：
+
+​	配置 16 位列表模式过滤器，接收四个标准 ID（11 位）。
+
+**返回值**： 无
+
+**注意事项**：
+
+​	1.`Filter_RTR`低 4 位分别对应 `id1`~`id4`（bit0=id1,…,bit3=id4）。0=数据帧，1=远程帧。
+
+​	2.过滤器模式需设为 `Cus_CAN_FILTERMODE_IDLIST`，尺度为 `Cus_CAN_SCALE_16BIT`。
+
+------
+
+- **过滤器32位拓展列表模式**
+
+```c
+void Cus_CAN_Filter_SetExtList32( CANFilterConfig_t *pFilter, uint8_t Filter_RTR, uint32_t id1, uint32_t id2 )
+```
+
+**描述**：
+
+​	配置 32 位列表模式过滤器，接收两个扩展 ID（29 位）。
+
+**返回值**：无
+
+**注意事项**：
+
+​	1.可接受ID范围( 0~0x1FFFFFFF)。
+
+​	2.自动强制匹配扩展帧（IDE=1）。过滤器模式需为 `Cus_CAN_FILTERMODE_IDLIST`，尺度 `Cus_CAN_SCALE_32BIT`。
 
 ------
 
